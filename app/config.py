@@ -1,0 +1,23 @@
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    chat_model: str = "gpt-4o-mini"
+    embedding_model: str = "text-embedding-3-small"
+    policies_dir: str = "policies"
+    faiss_index_dir: str = "data/faiss_index"
+    log_level: str = "INFO"
+    top_k: int = 5
+    chunk_size: int = 400
+    chunk_overlap: int = 80
+    scope_similarity_threshold: float = 0.30
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

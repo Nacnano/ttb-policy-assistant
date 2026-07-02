@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# FAISS index (generated at ingest time)
+data/faiss_index/
+
+# Evaluation output
+eval/*.log
