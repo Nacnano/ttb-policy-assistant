@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  policy-assistant:
+    build:
+      context: .
+      args:
+        OPENAI_API_KEY: ${OPENAI_API_KEY}
+    image: ttb-policy-assistant:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist the FAISS index across container restarts if built at runtime
+      - faiss_data:/app/data/faiss_index
+    restart: unless-stopped
+
+volumes:
+  faiss_data:
