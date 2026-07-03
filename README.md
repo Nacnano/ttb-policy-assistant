@@ -45,7 +45,7 @@ curl -X POST http://localhost:8000/ask \
 
 ```bash
 pytest -v
-# 61 tests, all passing — no API key required (integration tests mock OpenAI)
+# 68 tests, all passing — no API key required (integration tests mock OpenAI)
 ```
 
 ---
@@ -57,9 +57,9 @@ python eval/run_eval.py
 # Requires OPENAI_API_KEY + built index
 ```
 
-Runs 10 grounded Q&A + 3 adversarial questions in-process via httpx, prints a scored table.
+Runs 18 grounded Q&A + 6 adversarial questions in-process via httpx, prints a scored table.
 
-**Results (last run):**
+**Results (last run on G01–G10 + A01–A03):**
 
 | Metric | Score |
 |---|---|
@@ -67,6 +67,8 @@ Runs 10 grounded Q&A + 3 adversarial questions in-process via httpx, prints a sc
 | Grounded citation accuracy | 100% (10/10) |
 | Adversarial pass rate | 100% (3/3) |
 | **Overall** | **100%** |
+
+G11–G18 and A04–A06 were added to cover all 15 policies; re-run with an API key to verify.
 
 ---
 
@@ -203,7 +205,7 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 **Decision:** Keyword regex blocklist (O(1)) as the first gate; embedding cosine similarity to 10 in-scope anchor phrases as the second gate (threshold 0.30, configurable via `SCOPE_SIMILARITY_THRESHOLD`).
 
-**Rationale:** The blocklist catches obvious off-topic requests (account balances, crypto prices, weather) with zero API cost and sub-millisecond latency. The embedding gate catches subtler out-of-scope queries that bypass keywords. Anchors are pre-computed at startup — the gate adds only one embedding call per request.
+**Rationale:** The blocklist catches obvious off-topic requests (account balances, crypto prices, weather) with zero API cost and sub-millisecond latency. The embedding gate catches subtler out-of-scope queries that bypass keywords. 15 anchors (one per policy area) are pre-computed at startup — the gate adds only one embedding call per request.
 
 **Trade-off:** The 0.30 threshold was set heuristically. Production tuning would use a labelled evaluation set and precision/recall curves.
 
@@ -213,10 +215,10 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 | Threat | Control | Residual Risk |
 |---|---|---|
-| **Prompt injection** | `detect_injection()` regex on 10 known signatures; LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass |
+| **Prompt injection** | `detect_injection()` regex on 11 known signatures (including base64 blobs); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass |
 | **PII exfiltration via input** | `redact_pii()` applied to input before retrieval and logging | NER misses in regex-fallback mode; adversarially obfuscated PII |
 | **PII leakage via output** | `redact_pii()` applied to LLM output before returning | LLM paraphrasing PII in novel phrasing not matching regex |
-| **Question content in logs** | Questions are SHA-256 hashed before logging — raw text never written | Brute-force of short/common questions |
+| **Question content in logs** | Questions are SHA-256 hashed (32 hex chars) before logging — raw text never written | Brute-force of short/common questions |
 | **Secrets in codebase** | All secrets via `.env` / environment variables; `.env` is gitignored; no hardcoded keys | Accidental `git add .env` (mitigated by gitignore + CI pre-commit hook) |
 | **Personal data access via questions** | Scope guard blocks `account balance`, `transaction history`, `customer [ID]`, etc. | Creative phrasing not covered by blocklist and above embedding threshold |
 | **Hallucination / ungrounded answers** | System prompt instructs LLM to answer only from provided excerpts; citations parsed and returned; explicit no-context fallback message | LLM may still confabulate; citation format mismatch loses attribution |
@@ -231,7 +233,7 @@ Every `/ask` request produces one structured JSON log line to stdout:
 {
   "event": "ask_request",
   "request_id": "1528514f-544b-4e9d-b545-bf5913d96efd",
-  "question_hash": "73b27e79fbbec3b4",
+  "question_hash": "73b27e79fbbec3b4a1c2d3e4f5a6b7c8",
   "outcome": "success",
   "latency_ms": 3389.55,
   "prompt_tokens": 517,
@@ -292,7 +294,7 @@ ttb-policy-assistant/
 ├── policies/                # 15 synthetic .md policy documents
 ├── data/faiss_index/        # index.faiss + metadata.json (gitignored)
 ├── eval/
-│   ├── qa_pairs.json        # 10 grounded + 3 adversarial Q&A pairs
+│   ├── qa_pairs.json        # 18 grounded + 6 adversarial Q&A pairs
 │   └── run_eval.py          # in-process httpx + asgi-lifespan eval runner
 ├── tests/
 │   ├── unit/                # test_chunker, test_pii, test_scope, test_injection
@@ -314,7 +316,7 @@ ttb-policy-assistant/
 
 3. **Cross-encoder re-ranking** — add a reranker on top-10 FAISS results before passing top-5 to the LLM. Measurably improves answer groundedness on ambiguous queries.
 
-4. **CI/CD pipeline** — GitHub Actions: `pytest` on every PR; `docker build` smoke test; eval harness run with a score threshold gate (fail build if overall score < 80%).
+4. **CI/CD pipeline expansion** — add `docker build` smoke test and eval harness run with a score threshold gate (fail build if overall score < 80%) to the existing GitHub Actions workflow.
 
 5. **Live index updates** — replace FAISS with pgvector so new policy documents can be indexed without a full rebuild and without downtime.
 
