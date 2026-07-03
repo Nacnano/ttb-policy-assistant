@@ -10,11 +10,22 @@ import structlog
 _logger = structlog.get_logger("ttb.pii")
 
 # --- Regex-only fallback patterns ---
+# Order matters: email first, then the most specific numeric patterns before the greedy
+# phone pattern, so a bare 13-digit Thai ID is not mislabelled as a phone number (L4).
 _REGEX_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"), "<EMAIL_ADDRESS>"),
-    (re.compile(r"\+?[\d\s\-().]{10,17}(?=\s|$|[,.])", re.MULTILINE), "<PHONE_NUMBER>"),
     (re.compile(r"\b[0-9]{13}\b"), "<THAI_NATIONAL_ID>"),
+    (re.compile(r"\b[0-9]{10,16}\b"), "<BANK_ACCOUNT>"),
+    (re.compile(r"\+?[\d\s\-().]{10,17}(?=\s|$|[,.])", re.MULTILINE), "<PHONE_NUMBER>"),
 ]
+
+
+def _regex_redact(text: str) -> str:
+    """Regex-only fallback redaction. Covers email, Thai ID, bank account, and phone.
+    NOTE: cannot detect PERSON names — that requires the Presidio/spaCy NER path."""
+    for pattern, replacement in _REGEX_RULES:
+        text = pattern.sub(replacement, text)
+    return text
 
 # --- Presidio setup (optional) ---
 _presidio_available = False
@@ -57,7 +68,9 @@ def _try_init_presidio():
         _logger.info("pii_engine_initialized", engine="presidio")
     except Exception as exc:
         _presidio_available = False
-        _logger.info("pii_engine_initialized", engine="regex_fallback", reason=str(exc))
+        # WARNING, not info: in the container Presidio+spaCy are always installed, so this
+        # path means degraded redaction (no PERSON detection) — it must be visible.
+        _logger.warning("pii_engine_degraded", engine="regex_fallback", reason=str(exc))
 
 
 _try_init_presidio()
@@ -86,6 +99,4 @@ def redact_pii(text: str) -> str:
             _logger.warning("presidio_runtime_error", error=str(exc))
 
     # Regex fallback
-    for pattern, replacement in _REGEX_RULES:
-        text = pattern.sub(replacement, text)
-    return text
+    return _regex_redact(text)

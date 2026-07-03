@@ -47,6 +47,12 @@ class ScopeChecker:
         self._embedding_model = embedding_model
         self._threshold = threshold
         self._anchor_vectors: np.ndarray | None = None
+        self.last_embed_tokens = 0
+
+    @property
+    def anchors_ready(self) -> bool:
+        """True once the semantic-gate anchor embeddings have been loaded."""
+        return self._anchor_vectors is not None
 
     def load_anchors(self) -> None:
         """Pre-compute anchor embeddings (call once at startup)."""
@@ -60,6 +66,8 @@ class ScopeChecker:
         Return True if the text is in scope (i.e. about bank policies).
         Return False if it should be refused.
         """
+        self.last_embed_tokens = 0
+
         # Layer 1: keyword blocklist
         for pattern in _BLOCKLIST_PATTERNS:
             if pattern.search(text):
@@ -68,6 +76,9 @@ class ScopeChecker:
         # Layer 2: embedding similarity gate
         if self._anchor_vectors is not None:
             response = self._client.embeddings.create(input=[text], model=self._embedding_model)
+            usage = getattr(response, "usage", None)
+            tokens = getattr(usage, "total_tokens", 0)
+            self.last_embed_tokens = tokens if isinstance(tokens, int) else 0
             query_vec = np.array([response.data[0].embedding], dtype="float32")
             faiss.normalize_L2(query_vec)
             scores = (self._anchor_vectors @ query_vec.T).flatten()

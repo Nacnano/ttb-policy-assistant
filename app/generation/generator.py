@@ -26,7 +26,12 @@ After your answer, list citations in this exact format (one per line):
 def _build_excerpts(chunks: list[dict]) -> str:
     parts = []
     for i, c in enumerate(chunks, 1):
-        parts.append(f"[{i}] Source: {c['source']} | ID: {c['chunk_id']}\n{c['text']}")
+        section = c.get("header_path", "")
+        header = f"[{i}] Source: {c['source']}"
+        if section:
+            header += f" | Section: {section}"
+        header += f" | ID: {c['chunk_id']}"
+        parts.append(f"{header}\n{c['text']}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -58,24 +63,18 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
     # Remove trailing blank lines that result from stripping citations
     clean_answer = "\n".join(line for line in clean_answer.splitlines() if line.strip())
 
-    # If no citations parsed from text, fall back to the retrieved chunks
-    if not citations and chunks:
-        for c in chunks[:3]:
-            citations.append(
-                Citation(
-                    source=c["source"],
-                    chunk_id=c["chunk_id"],
-                    excerpt=c["text"][:300],
-                )
-            )
-
+    # NOTE: intentionally NO fallback citations. A citation must represent what the answer
+    # is actually grounded in — fabricating citations from the retrieved set (even for a
+    # refusal) breaks grounding integrity and inflates eval citation accuracy. If the model
+    # cited nothing, we return an empty citation list.
     return clean_answer, citations
 
 
 class Generator:
-    def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o-mini", temperature: float = 0.0):
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._model = model
+        self._temperature = temperature
 
     def generate(self, question: str, chunks: list[dict]) -> dict:
         """Generate a grounded answer with citations. Returns dict with answer, citations, token counts."""
@@ -89,7 +88,7 @@ class Generator:
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
-            temperature=0.1,
+            temperature=self._temperature,
             max_tokens=1024,
         )
 

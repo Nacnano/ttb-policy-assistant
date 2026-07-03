@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     chunk_size: int = 400
     chunk_overlap: int = 80
     scope_similarity_threshold: float = 0.30
+    retrieval_min_score: float = 0.25  # drop retrieved chunks below this cosine score
+    generation_temperature: float = 0.0  # 0 = deterministic (reproducible eval)
 
 
 @lru_cache
