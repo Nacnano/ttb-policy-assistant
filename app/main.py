@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
         base_url=settings.openai_base_url,
         model=settings.chat_model,
         temperature=settings.generation_temperature,
+        max_tokens=settings.generation_max_tokens,
     )
 
     _scope_checker = ScopeChecker(

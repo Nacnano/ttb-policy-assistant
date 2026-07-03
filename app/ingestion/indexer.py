@@ -4,6 +4,10 @@ from pathlib import Path
 import faiss
 import numpy as np
 
+from app.observability.logging import get_logger
+
+logger = get_logger()
+
 
 def build_index(embeddings: list[list[float]], chunks: list[dict], index_dir: str) -> None:
     """Build FAISS IndexFlatIP (inner-product = cosine after L2 norm) and save to disk."""
@@ -24,7 +28,7 @@ def build_index(embeddings: list[list[float]], chunks: list[dict], index_dir: st
     ]
     (Path(index_dir) / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Index built: {index.ntotal} vectors, dim={dim}, saved to {index_dir}")
+    logger.info("index_built", vector_count=index.ntotal, dim=dim, index_dir=str(index_dir))
 
 
 def load_index(index_dir: str) -> tuple[faiss.Index, list[dict]]:

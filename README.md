@@ -45,7 +45,7 @@ curl -X POST http://localhost:8000/ask \
 
 ```bash
 pytest -v
-# 76 tests, all passing — no API key required (integration tests mock OpenAI)
+# 95 tests, all passing — no API key required (integration tests mock OpenAI)
 ```
 
 ---
@@ -107,6 +107,11 @@ If no build secret is supplied the image still builds, but the index is **not** 
 must build it at runtime (mount `policies/` and run `python scripts/ingest.py` into a mounted
 `data/faiss_index` volume) or `/ask` returns `503 INDEX_NOT_READY`.
 
+The container runs as a non-root `appuser` and defines a `HEALTHCHECK` against `GET /health`,
+so `docker ps` / Compose / orchestrators can detect a wedged process. Note the healthcheck is a
+liveness signal only — it reports healthy even if the OpenAI upstream is down, since that
+failure mode only surfaces on `/ask`.
+
 ---
 
 ## API Reference
@@ -157,6 +162,7 @@ Error codes:
 - `503 INDEX_NOT_READY` — knowledge base not built
 - `503 SCOPE_UNAVAILABLE` — semantic scope gate could not load; failing closed
 - `503 UPSTREAM_ERROR` — LLM/embedding call failed (timeout, rate-limit, etc.)
+- `500 INTERNAL_ERROR` — catch-all backstop; no unhandled exception can escape without a structured body and one log line
 
 ---
 

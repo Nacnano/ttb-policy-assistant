@@ -71,10 +71,18 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
 
 
 class Generator:
-    def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o-mini", temperature: float = 0.0):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.0,
+        max_tokens: int = 1024,
+    ):
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._model = model
         self._temperature = temperature
+        self._max_tokens = max_tokens
 
     def generate(self, question: str, chunks: list[dict]) -> dict:
         """Generate a grounded answer with citations. Returns dict with answer, citations, token counts."""
@@ -89,7 +97,7 @@ class Generator:
                 {"role": "user", "content": user_msg},
             ],
             temperature=self._temperature,
-            max_tokens=1024,
+            max_tokens=self._max_tokens,
         )
 
         raw_answer = response.choices[0].message.content or ""

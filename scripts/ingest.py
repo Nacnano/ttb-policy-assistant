@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.config import get_settings
+from app.observability.logging import configure_logging
 from app.ingestion.loader import load_policies
 from app.ingestion.chunker import chunk_document
 from app.ingestion.embedder import embed_chunks
@@ -20,6 +21,7 @@ from app.ingestion.indexer import build_index
 
 
 def main():
+    configure_logging()  # so indexer's structlog output renders as JSON, matching the app
     settings = get_settings()
 
     if not settings.openai_api_key:

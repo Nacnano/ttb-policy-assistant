@@ -30,6 +30,18 @@ RUN --mount=type=secret,id=openai_key \
         OPENAI_API_KEY="$(cat /run/secrets/openai_key)" python scripts/ingest.py; \
     else echo "No build secret 'openai_key' — index NOT baked; build it at runtime."; fi
 
+# Create non-root user and ensure the (possibly just-built) FAISS index directory
+# is owned by it, since /app/data may be written either above (as root) or at
+# runtime (as appuser).
+RUN useradd --create-home appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app/data
+
+USER appuser
+
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

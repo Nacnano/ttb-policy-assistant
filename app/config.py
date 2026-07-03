@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     scope_similarity_threshold: float = 0.30
     retrieval_min_score: float = 0.25  # drop retrieved chunks below this cosine score
     generation_temperature: float = 0.0  # 0 = deterministic (reproducible eval)
+    generation_max_tokens: int = Field(default=1024, gt=0)  # cap on generated answer length
 
 
 @lru_cache
