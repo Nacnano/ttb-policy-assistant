@@ -6,53 +6,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **Python RAG microservice** ("ttb Policy Assistant") built as a take-home engineering assessment for TMBThanachart Bank's AI Centre of Excellence. It answers staff questions about bank policies using Retrieval-Augmented Generation with banking-grade guardrails and observability.
 
-See `ASSIGNMENT.md` for the full specification and scoring rubric.
+See `ASSIGNMENT.md` for the full specification and scoring rubric, and `README.md` for design decisions (ADRs), the threat model, SLOs, and the API reference.
 
-## Required Deliverables
+## Architecture
 
-The following must be built (nothing exists yet):
+- **Framework**: FastAPI + Pydantic v2 + pydantic-settings (`get_settings()` is `@lru_cache`d)
+- **Vector store**: FAISS `IndexFlatIP` with L2-normalised vectors (= cosine similarity), persisted to `data/faiss_index/` (gitignored — run `python scripts/ingest.py` to build)
+- **LLM**: OpenAI `gpt-4o-mini` (chat, temp 0) + `text-embedding-3-small` (embeddings); Azure OpenAI reachable by changing `OPENAI_BASE_URL`
+- **Logging**: structlog JSON to stdout — one `ask_request` line per request on every terminal path, with hashed question, latency, and full token counts
 
-| Component | Description |
+### Request flow (`POST /ask`, see `app/main.py`)
+
+Pydantic validation → injection detection (400) → PII redaction on input → scope gate (keyword blocklist + embedding cosine, **fails closed** with 503 `SCOPE_UNAVAILABLE`) → FAISS retrieval with relevance floor (grounded refusal if nothing clears it, no LLM call) → generation with citation parsing → PII redaction on output → structured log → response. Upstream failures return 503 `UPSTREAM_ERROR`; a global handler backstops anything else with 500 `INTERNAL_ERROR`.
+
+## Module Map
+
+| Path | Purpose |
 |---|---|
-| `POST /ask` HTTP API | Input validation, structured JSON response with answer + citations |
-| Ingestion pipeline | Chunk, embed, and index ~15-20 synthetic policy docs into a vector store |
-| RAG pipeline | Retrieve relevant chunks, generate grounded answer with source citations |
-| Guardrails | PII redaction on input/output, out-of-scope refusal, prompt-injection resistance |
-| Observability | Structured logging, per-request token count and latency telemetry |
-| Tests | Unit tests for chunking/guardrails + at least one `/ask` integration test |
-| Eval harness | Runs 10 evaluation questions, prints groundedness/correctness summary |
-| Dockerfile | Builds and runs the service on a clean machine |
+| `app/main.py` | FastAPI app, lifespan (loads index via try/except so tests can mock `app.main.load_index`), `/health` + `/ask` |
+| `app/config.py` | pydantic-settings; all tunables (`RETRIEVAL_MIN_SCORE`, `SCOPE_SIMILARITY_THRESHOLD`, `TOP_K`, …) |
+| `app/ingestion/` | loader → MarkdownHeader/Recursive chunker → batched OpenAI embedder (tenacity retries) → FAISS indexer |
+| `app/retrieval/retriever.py` | embed query, normalise, FAISS search with score floor |
+| `app/generation/generator.py` | structured prompt (XML-delimited, section-tagged excerpts), citation parsing |
+| `app/guardrails/` | `injection.py` (12 regex attack signatures), `pii.py` (Presidio + regex fallback), `scope.py` (blocklist + embedding gate) |
+| `app/observability/logging.py` | structlog config, `log_request()` |
+| `scripts/ingest.py` | CLI: load → chunk → embed → index |
+| `eval/run_eval.py` | in-process httpx eval harness; 18 grounded + 6 adversarial pairs in `eval/qa_pairs.json`; exits non-zero if gate fails (grounded ≥ 80% AND adversarial = 100%) |
 
-## Architecture Decisions (to be made)
-
-- **Vector store**: FAISS (no infra needed), pgvector, or Azure AI Search
-- **LLM**: OpenAI-compatible API (Azure OpenAI preferred; mocking permitted)
-- **Framework**: FastAPI recommended (async, auto-docs, Pydantic validation)
-- **Secrets**: via environment variables only — never hardcoded
-
-## Commands (once implemented)
+## Commands
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm   # optional: full Presidio NER (regex fallback otherwise)
 
-# Run the service
-uvicorn app.main:app --reload
+python scripts/ingest.py                  # build the FAISS index (requires OPENAI_API_KEY)
+uvicorn app.main:app --reload             # run the service
 
-# Run tests
-pytest
+pytest                                    # 95 tests; no API key needed (OpenAI is mocked)
+python eval/run_eval.py                   # eval harness (requires OPENAI_API_KEY + built index)
 
-# Run eval harness
-python eval/run_eval.py
-
-# Build Docker image
-docker build -t ttb-policy-assistant .
+# Docker — API key passed as a BuildKit secret to bake the index (never stored in a layer)
+DOCKER_BUILDKIT=1 docker build --secret id=openai_key,env=OPENAI_API_KEY -t ttb-policy-assistant .
 docker run --env-file .env -p 8000:8000 ttb-policy-assistant
 ```
 
+## Implementation Notes
+
+- The embedded text of each chunk is **prefixed with its source + header path** (ADR-003). After changing chunking or embedding, re-run `scripts/ingest.py` — a stale index silently degrades retrieval.
+- Integration tests mock `app.main.load_index` and `openai.OpenAI` — patch those exact targets.
+- Presidio needs the `en_core_web_sm` spaCy model; without it the PII layer falls back to regex (no PERSON detection) and logs a WARNING.
+- `requirements.txt` is fully pinned; regenerate deliberately, not ad hoc.
+
 ## Key Constraints
 
-- No real bank data or customer data anywhere in the repo
-- All secrets via environment variables or `.env` file (`.env` is gitignored)
-- Adversarial/out-of-scope questions must be refused, not answered
+- No real bank data or customer data anywhere in the repo — all policy docs are synthetic
+- All secrets via environment variables or `.env` file (`.env` is gitignored); never hardcoded
+- Adversarial/out-of-scope questions must be refused, not answered; guardrails fail closed
 - Answers must cite source chunks — no hallucination without grounding

@@ -254,7 +254,7 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 | Threat | Control | Residual Risk |
 |---|---|---|
-| **Prompt injection** | `detect_injection()` regex on 11 known signatures (including base64 blobs); patterns tuned to avoid blocking benign phrasing (e.g. the name "Dan", "act as an approving manager"); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass; **English-only** — Thai-language injection is not pattern-matched (relies on the multilingual embedding scope gate) |
+| **Prompt injection** | `detect_injection()` regex on 12 known signatures (including base64 blobs); patterns tuned to avoid blocking benign phrasing (e.g. the name "Dan", "act as an approving manager"); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass; **English-only** — Thai-language injection is not pattern-matched (relies on the multilingual embedding scope gate) |
 | **PII exfiltration via input** | `redact_pii()` applied to input before retrieval and logging | NER misses in regex-fallback mode (PERSON not covered); adversarially obfuscated PII. Fallback logs a `WARNING` so degraded redaction is visible |
 | **PII leakage via output** | `redact_pii()` applied to LLM output before returning | LLM paraphrasing PII in novel phrasing not matching regex |
 | **Question content in logs** | Questions are SHA-256 hashed (32 hex chars) before logging — raw text never written; `session_id` constrained to `[A-Za-z0-9_-]{1,64}` to prevent log-forging | Brute-force of short/common questions |
@@ -331,7 +331,7 @@ ttb-policy-assistant/
 │   ├── generation/
 │   │   └── generator.py     # structured prompt, gpt-4o-mini, citation parse
 │   ├── guardrails/
-│   │   ├── injection.py     # regex patterns for 11 attack signatures
+│   │   ├── injection.py     # regex patterns for 12 attack signatures
 │   │   ├── pii.py           # Presidio + regex fallback
 │   │   └── scope.py         # keyword blocklist + embedding cosine gate
 │   └── observability/
