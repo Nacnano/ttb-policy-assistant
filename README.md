@@ -183,3 +183,43 @@ With more time, roughly in order:
 ## AI use disclosure
 
 I built this with AI assistance (Claude, by Anthropic) doing much of the code generation: the FastAPI scaffolding, guardrail implementations, tests, eval harness, and drafts of this README. I directed the architecture, reviewed and debugged all of the generated code, and verified the behaviour against the assignment spec — the design decisions, threat model, and trade-offs above are choices I made and can defend.
+
+## Appendix — Design Q&A
+
+Questions I'd expect a reviewer to ask that the sections above don't answer directly, with honest answers.
+
+**Q: The endpoints are `async def` — do the OpenAI calls actually run async?**
+Yes, now. The first version used the synchronous OpenAI client inside async handlers, which blocked the event loop for the ~4 s of each LLM round-trip and would have serialized concurrent requests. I caught this in review and converted the request path to `AsyncOpenAI` (generator, retriever, scope gate), measured the fix — three concurrent requests complete in the wall time of the slowest one (~7.7 s) instead of the sum (~21 s) — and left the offline ingest CLI synchronous on purpose. A side-effect worth mentioning: properly awaiting startup *exposed* a latent lifespan timeout in the eval harness that the blocking version had been masking.
+
+**Q: Could the model fabricate a citation?**
+Partially guarded. The parser only accepts citations the model actually emitted, and never falls back to "cite whatever was retrieved" — a refusal returns an empty citation list. But it does not currently cross-check the cited `chunk_id` against the retrieved set, so a hallucinated citation line in the correct format would pass through. The fix is a set-membership check against the retrieved chunk IDs (with tolerance for the model abbreviating IDs); it's a small change I'd pair with a citation-accuracy eval metric that validates against retrieval, not just the expected source name.
+
+**Q: Why module-level singletons in `main.py` instead of FastAPI dependency injection?**
+Pragmatism at this size: three objects created once in the lifespan, used by one endpoint. `Depends()` with `app.state` would be the pattern the moment there's a second endpoint or per-request configuration — the current structure converts to it mechanically. The singletons are already injected-by-mock in the integration tests, which is the main thing DI would have bought.
+
+**Q: What exactly happens when OpenAI is down?**
+Three layers: the client has a 30 s timeout; query embedding retries 3× with exponential backoff (tenacity); anything that still fails returns `503 UPSTREAM_ERROR` with full error telemetry in the log. Two subtleties: the scope gate *fails closed* (an unavailable guardrail refuses rather than waves through), and `/health` stays green — it's a liveness probe, and an upstream outage is a dependency failure, not a dead process. A readiness probe that pings the upstream would be the production addition.
+
+**Q: `session_id` is in the request model but there's no conversation memory — why?**
+It's a log-correlation field, not a memory key: a client can tag related requests and trace them across log lines. True multi-turn RAG (rewriting follow-up questions against history before retrieval) is a meaningful feature with real guardrail implications — history becomes another injection surface — so I left it out of a 1–2 day scope rather than half-build it.
+
+**Q: How were the two magic numbers — retrieval floor 0.25 and scope threshold 0.30 — chosen?**
+By inspection, not optimization: I looked at score distributions for on-topic vs. off-topic queries and picked values with visible margin on both sides. Both are env-configurable. The proper method is a labelled query set and a precision/recall curve per threshold — that's on the roadmap, and I'd treat the current values as defaults, not truths.
+
+**Q: Why regex + embeddings for the guardrails instead of an LLM classifier?**
+Cost, latency, and determinism. The blocklist is free and instant; the embedding gate adds one cheap call; both give reproducible verdicts that can be unit-tested. An LLM classifier is itself a promptable attack surface and adds a full round-trip per request. At higher stakes I'd add one as a third layer — flagging, not replacing, the deterministic gates.
+
+**Q: What happens with a Thai-language question?**
+Retrieval and the scope gate degrade gracefully — `text-embedding-3-small` is multilingual enough that a Thai policy question lands near the English anchors and chunks. The injection regexes and the scope blocklist are English-only, which the threat model calls out: a Thai injection attempt is caught only if it goes off-topic semantically. Real Thai support means translated anchor phrases, Thai attack patterns, and ideally a Thai policy corpus — a market requirement for ttb I'd prioritize early.
+
+**Q: How does this scale horizontally?**
+The service is stateless — the index is baked into the image and everything else is per-request — so N replicas behind a load balancer work today with no coordination. The costs are that every replica carries the index copy and a policy update is an image rebuild + rolling deploy. That's fine at 15 documents and even a few thousand; the pgvector move happens when policy updates need to be live rather than release-shipped.
+
+**Q: What does a policy update look like operationally?**
+Edit the Markdown in `policies/`, commit, CI rebuilds the image (re-chunk, re-embed — about a cent of API spend for the whole corpus), rolling deploy. Documents are versioned in git alongside the code, which is a feature for a bank: the exact policy text the assistant could cite at any point in time is reconstructible.
+
+**Q: What does a request cost?**
+Roughly $0.0002: ~600 prompt tokens + ~80 completion tokens on `gpt-4o-mini`, plus two small embedding calls (scope check and retrieval — counted in the logged `embedding_tokens`, so the telemetry reflects true spend). At 10,000 questions/day that's about $2/day, which is why I didn't spend time on caching yet — an answer cache keyed on question hash would be the first optimization if usage grows.
+
+**Q: If you could change one thing about the evaluation, what?**
+Break the self-grading loop: the eval questions were written by the person who built the system, so 100% partly measures that the questions fit the corpus. An independently-authored question set (e.g., by HR staff who use the real policies) plus an LLM judge for semantic correctness would make the number defensible rather than merely reproducible. This is exactly why the CI gate is set at 80%, not 100%.
