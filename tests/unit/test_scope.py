@@ -67,3 +67,17 @@ def test_scope_checker_with_low_similarity_rejects():
         result = checker.check_scope("random unrelated query")
 
     assert result is False
+
+
+def test_scope_checker_with_high_similarity_accepts():
+    import numpy as np
+    import faiss
+    checker = ScopeChecker(api_key="fake", base_url="https://api.openai.com/v1", threshold=0.30)
+    anchor = np.ones((1, 1536), dtype="float32")
+    faiss.normalize_L2(anchor)
+    checker._anchor_vectors = anchor
+    mock_response = MagicMock()
+    mock_response.data = [MagicMock(embedding=anchor[0].tolist())]
+    with patch.object(checker._client.embeddings, "create", return_value=mock_response):
+        result = checker.check_scope("What is the leave policy?")
+    assert result is True

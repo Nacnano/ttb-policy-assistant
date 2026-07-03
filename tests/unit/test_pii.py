@@ -38,3 +38,15 @@ def test_redacts_person_name():
     # Presidio may redact PERSON entity
     assert isinstance(result, str)
     assert len(result) > 0
+
+
+def test_redacts_thai_national_id():
+    text = "My national ID is 1234567890123 for verification."
+    result = redact_pii(text)
+    assert "1234567890123" not in result
+
+
+def test_redacts_multiple_pii_in_one_string():
+    text = "Contact john@example.com or call +66 91 234 5678 for details."
+    result = redact_pii(text)
+    assert "john@example.com" not in result
