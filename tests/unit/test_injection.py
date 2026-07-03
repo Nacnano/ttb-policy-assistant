@@ -31,6 +31,11 @@ SAFE_CASES = [
     "What is the performance review process and annual evaluation timeline?",
     "How does the reimbursement process work for international business travel expenses?",
     "Can you explain the whistleblower protection and non-retaliation policy?",
+    # Benign phrasings that previously tripped false positives (M2):
+    "How should I act as an approving manager for expense claims?",
+    "Can Dan in HR approve my leave request?",
+    "Employees who behave as signatories must follow the code of conduct.",
+    "Am I now able to submit expenses online?",
 ]
 
 

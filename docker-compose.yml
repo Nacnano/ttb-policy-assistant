@@ -1,20 +1,21 @@
-version: "3.9"
-
 services:
   policy-assistant:
     build:
       context: .
-      args:
-        OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # BuildKit secret — the key is used only to bake the FAISS index during build and is
+      # never written into an image layer. Requires OPENAI_API_KEY in the environment.
+      secrets:
+        - openai_key
     image: ttb-policy-assistant:latest
     ports:
       - "8000:8000"
+    # Runtime secrets (used by the service at request time) come from .env, not the image.
     env_file:
       - .env
-    volumes:
-      # Persist the FAISS index across container restarts if built at runtime
-      - faiss_data:/app/data/faiss_index
     restart: unless-stopped
 
-volumes:
-  faiss_data:
+# The index is baked into the image at build time, so no volume is mounted over
+# /app/data/faiss_index (a named volume there would shadow the baked index and force a 503).
+secrets:
+  openai_key:
+    environment: OPENAI_API_KEY

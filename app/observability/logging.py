@@ -48,6 +48,7 @@ def log_request(
     latency_ms: float,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    embedding_tokens: int = 0,
     session_id: str | None = None,
     error_code: str | None = None,
 ) -> None:
@@ -59,7 +60,8 @@ def log_request(
         latency_ms=round(latency_ms, 2),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+        embedding_tokens=embedding_tokens,
+        total_tokens=prompt_tokens + completion_tokens + embedding_tokens,
         session_id=session_id,
         error_code=error_code,
     )

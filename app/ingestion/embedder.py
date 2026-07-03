@@ -16,6 +16,13 @@ def _embed_batch(client: openai.OpenAI, texts: list[str], model: str) -> list[li
     return [item.embedding for item in response.data]
 
 
+def _embed_text(chunk: dict) -> str:
+    """Prefix source + section so recursively-split sub-chunks (which lose their header
+    line) still carry self-contained context into the vector."""
+    header = chunk.get("header_path") or chunk["source"]
+    return f"{chunk['source']} — {header}\n{chunk['text']}"
+
+
 def embed_chunks(
     chunks: list[dict],
     api_key: str,
@@ -24,7 +31,7 @@ def embed_chunks(
 ) -> list[list[float]]:
     """Embed all chunk texts in batches. Returns list of embedding vectors."""
     client = _get_client(api_key, base_url)
-    texts = [c["text"] for c in chunks]
+    texts = [_embed_text(c) for c in chunks]
     embeddings = []
 
     for i in range(0, len(texts), _BATCH_SIZE):

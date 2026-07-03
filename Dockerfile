@@ -20,13 +20,28 @@ COPY app/ ./app/
 COPY policies/ ./policies/
 COPY scripts/ ./scripts/
 
-# Build the FAISS index at image build time
-# Requires OPENAI_API_KEY as build argument
-ARG OPENAI_API_KEY
-ENV OPENAI_API_KEY=${OPENAI_API_KEY}
-RUN if [ -n "$OPENAI_API_KEY" ]; then python scripts/ingest.py; \
-    else echo "WARNING: OPENAI_API_KEY not provided — index will be built at runtime"; fi
+# Build the FAISS index at image build time using a BuildKit secret so the API key is
+# NEVER persisted into an image layer (unlike ARG/ENV, which leak via `docker history`).
+#   DOCKER_BUILDKIT=1 docker build --secret id=openai_key,env=OPENAI_API_KEY -t ttb-policy-assistant .
+# If no secret is supplied the build still succeeds; the index must then be built at
+# runtime (mount policies + run scripts/ingest.py, or ingest into a mounted volume).
+RUN --mount=type=secret,id=openai_key \
+    if [ -f /run/secrets/openai_key ]; then \
+        OPENAI_API_KEY="$(cat /run/secrets/openai_key)" python scripts/ingest.py; \
+    else echo "No build secret 'openai_key' — index NOT baked; build it at runtime."; fi
+
+# Create non-root user and ensure the (possibly just-built) FAISS index directory
+# is owned by it, since /app/data may be written either above (as root) or at
+# runtime (as appuser).
+RUN useradd --create-home appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app/data
+
+USER appuser
 
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

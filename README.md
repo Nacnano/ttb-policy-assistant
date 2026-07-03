@@ -45,7 +45,7 @@ curl -X POST http://localhost:8000/ask \
 
 ```bash
 pytest -v
-# 68 tests, all passing — no API key required (integration tests mock OpenAI)
+# 95 tests, all passing — no API key required (integration tests mock OpenAI)
 ```
 
 ---
@@ -58,32 +58,59 @@ python eval/run_eval.py
 ```
 
 Runs 18 grounded Q&A + 6 adversarial questions in-process via httpx, prints a scored table.
+Generation runs at `temperature=0` so the harness is **reproducible** run-to-run; the model +
+embedding IDs are printed for provenance.
 
-**Results (last run):**
+**Metrics** (grounded set):
+- **keyword** — the expected fact phrase appears in the answer *and* it is not a refusal
+- **citation** — the expected source document is cited
+- **grounded** — keyword *and* citation, i.e. the answer is both correct and attributed
+
+The headline **RAG Groundedness Score** is the `grounded` rate. Adversarial pass-rate is
+reported separately (not folded into the RAG score). CI gate: `grounded ≥ 80%` **and**
+`adversarial = 100%`.
+
+**Results (last verified run — `gpt-4o-mini` / `text-embedding-3-small`, temp 0):**
 
 | Metric | Score |
 |---|---|
 | Grounded keyword accuracy | 100% (18/18) |
 | Grounded citation accuracy | 100% (18/18) |
+| **Groundedness (keyword AND citation)** | **100% (18/18)** |
 | Adversarial pass rate | 100% (6/6) |
-| **Overall** | **100%** |
+
+> Note: keyword matching is done against paraphrased LLM output, and `gpt-4o-mini` is not
+> perfectly deterministic even at temp 0, so an occasional grounded item may dip on a given
+> run (an earlier run scored 16/18 before a keyword phrase was broadened). The **CI gate**,
+> not a flat 100%, is what guarantees quality. Re-run `python scripts/ingest.py` before the
+> harness — the embedding scheme prefixes section context to each chunk (see ADR-003).
 
 ---
 
 ## Docker
 
 ```bash
-# Build - embeds FAISS index at build time
-docker build --build-arg OPENAI_API_KEY=$OPENAI_API_KEY -t ttb-policy-assistant .
+# Build — bakes the FAISS index at build time. The key is passed as a BuildKit *secret*,
+# so it is never written into an image layer (a build-arg/ENV would leak via `docker history`).
+DOCKER_BUILDKIT=1 docker build \
+  --secret id=openai_key,env=OPENAI_API_KEY \
+  -t ttb-policy-assistant .
 
-# Run
+# Run — runtime secrets come from the environment, not the image
 docker run --env-file .env -p 8000:8000 ttb-policy-assistant
 
-# Or via Compose
-docker-compose up --build
+# Or via Compose (uses the same build secret from $OPENAI_API_KEY)
+OPENAI_API_KEY=$OPENAI_API_KEY docker compose up --build
 ```
 
-If `OPENAI_API_KEY` is not provided as a build arg, the index is built on first startup instead.
+If no build secret is supplied the image still builds, but the index is **not** baked — you
+must build it at runtime (mount `policies/` and run `python scripts/ingest.py` into a mounted
+`data/faiss_index` volume) or `/ask` returns `503 INDEX_NOT_READY`.
+
+The container runs as a non-root `appuser` and defines a `HEALTHCHECK` against `GET /health`,
+so `docker ps` / Compose / orchestrators can detect a wedged process. Note the healthcheck is a
+liveness signal only — it reports healthy even if the OpenAI upstream is down, since that
+failure mode only surfaces on `/ask`.
 
 ---
 
@@ -123,12 +150,19 @@ If `OPENAI_API_KEY` is not provided as a build arg, the index is built on first 
 }
 ```
 
-**Error 400**
+**Error 400 / 503**
 ```json
 {"detail": {"error": "...", "code": "OUT_OF_SCOPE"}}
 ```
 
-Error codes: `OUT_OF_SCOPE` | `INJECTION_DETECTED` | `VALIDATION_ERROR`
+Error codes:
+- `400 INJECTION_DETECTED` — prompt-injection signature matched
+- `400 OUT_OF_SCOPE` — question not about bank policy
+- `422` — request validation failure (FastAPI default shape)
+- `503 INDEX_NOT_READY` — knowledge base not built
+- `503 SCOPE_UNAVAILABLE` — semantic scope gate could not load; failing closed
+- `503 UPSTREAM_ERROR` — LLM/embedding call failed (timeout, rate-limit, etc.)
+- `500 INTERNAL_ERROR` — catch-all backstop; no unhandled exception can escape without a structured body and one log line
 
 ---
 
@@ -137,15 +171,20 @@ Error codes: `OUT_OF_SCOPE` | `INJECTION_DETECTED` | `VALIDATION_ERROR`
 ```
 POST /ask
   |
-  |-- [1] Pydantic validation (422 on fail)
+  |-- [1] Pydantic validation (422 on fail; question stripped, session_id constrained)
   |-- [2] Injection detection -> 400 INJECTION_DETECTED
   |-- [3] PII redaction on input (Presidio + regex fallback)
-  |-- [4] Scope check: keyword blocklist + embedding cosine gate -> 400 OUT_OF_SCOPE
-  |-- [5] FAISS retrieval: embed query -> top-5 cosine-similar chunks
-  |-- [6] LLM generation: structured system prompt with XML-delimited policy excerpts
+  |-- [4] Scope check: keyword blocklist + embedding cosine gate
+  |         -> 400 OUT_OF_SCOPE   (off-topic)
+  |         -> 503 SCOPE_UNAVAILABLE (gate could not load — FAIL CLOSED, never bypassed)
+  |-- [5] FAISS retrieval: embed query -> top-5 chunks above the relevance floor
+  |         -> if none clear the floor: grounded refusal, empty citations, no LLM call
+  |-- [6] LLM generation (temp 0): structured prompt w/ XML-delimited, section-tagged excerpts
   |-- [7] PII redaction on output
-  |-- [8] structlog JSON log (question hash, latency, tokens, outcome)
+  |-- [8] structlog JSON log (question hash, latency, prompt/completion/embedding tokens, outcome)
   `-- [9] AskResponse
+
+  Any upstream failure in [4]-[6] -> 503 UPSTREAM_ERROR with full error telemetry logged.
 ```
 
 **Ingestion pipeline** (run once via `python scripts/ingest.py`):
@@ -183,7 +222,7 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 **Decision:** `MarkdownHeaderTextSplitter` first (splits on `#`/`##`/`###`), then `RecursiveCharacterTextSplitter` (400 chars, 80 overlap) for sections that exceed the chunk size.
 
-**Rationale:** Header-aware splitting keeps semantically coherent sections together (e.g., "Annual Leave" stays with its bullet points), which improves retrieval precision vs. pure character splitting. The recursive fallback handles unusually long sections without losing header context.
+**Rationale:** Header-aware splitting keeps semantically coherent sections together (e.g., "Annual Leave" stays with its bullet points), which improves retrieval precision vs. pure character splitting. The recursive fallback handles unusually long sections without losing header context. Each chunk's `source` + `header_path` is **prefixed to the text that gets embedded** and shown to the LLM as a `Section:` tag, so recursively-split sub-chunks (which lose their header line) still carry self-contained context into both the vector and the prompt.
 
 **Trade-off:** Quality depends on the document author using headers consistently. Unstructured PDFs would need a different extraction strategy (e.g., unstructured.io or Azure Document Intelligence).
 
@@ -201,11 +240,13 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 ### ADR-005 — Two-layer scope guard
 
-**Decision:** Keyword regex blocklist (O(1)) as the first gate; embedding cosine similarity to 10 in-scope anchor phrases as the second gate (threshold 0.30, configurable via `SCOPE_SIMILARITY_THRESHOLD`).
+**Decision:** Keyword regex blocklist (O(1)) as the first gate; embedding cosine similarity to 15 in-scope anchor phrases as the second gate (threshold 0.30, configurable via `SCOPE_SIMILARITY_THRESHOLD`).
 
 **Rationale:** The blocklist catches obvious off-topic requests (account balances, crypto prices, weather) with zero API cost and sub-millisecond latency. The embedding gate catches subtler out-of-scope queries that bypass keywords. 15 anchors (one per policy area) are pre-computed at startup — the gate adds only one embedding call per request.
 
-**Trade-off:** The 0.30 threshold was set heuristically. Production tuning would use a labelled evaluation set and precision/recall curves.
+**Fail-closed posture:** If the anchor embeddings cannot be loaded at startup (embedding API error) while an API key *is* configured, the service does **not** silently degrade to keyword-only. `/ask` returns `503 SCOPE_UNAVAILABLE` and logs a `WARNING` — a security gate must never disappear unnoticed.
+
+**Trade-off:** The 0.30 threshold was set heuristically. Production tuning would use a labelled evaluation set and precision/recall curves. Anchors and keywords are currently English-only (see Threat Model).
 
 ---
 
@@ -213,13 +254,13 @@ policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
 
 | Threat | Control | Residual Risk |
 |---|---|---|
-| **Prompt injection** | `detect_injection()` regex on 11 known signatures (including base64 blobs); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass |
-| **PII exfiltration via input** | `redact_pii()` applied to input before retrieval and logging | NER misses in regex-fallback mode; adversarially obfuscated PII |
+| **Prompt injection** | `detect_injection()` regex on 11 known signatures (including base64 blobs); patterns tuned to avoid blocking benign phrasing (e.g. the name "Dan", "act as an approving manager"); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass; **English-only** — Thai-language injection is not pattern-matched (relies on the multilingual embedding scope gate) |
+| **PII exfiltration via input** | `redact_pii()` applied to input before retrieval and logging | NER misses in regex-fallback mode (PERSON not covered); adversarially obfuscated PII. Fallback logs a `WARNING` so degraded redaction is visible |
 | **PII leakage via output** | `redact_pii()` applied to LLM output before returning | LLM paraphrasing PII in novel phrasing not matching regex |
-| **Question content in logs** | Questions are SHA-256 hashed (32 hex chars) before logging — raw text never written | Brute-force of short/common questions |
-| **Secrets in codebase** | All secrets via `.env` / environment variables; `.env` is gitignored; no hardcoded keys | Accidental `git add .env` (mitigated by gitignore + CI pre-commit hook) |
-| **Personal data access via questions** | Scope guard blocks `account balance`, `transaction history`, `customer [ID]`, etc. | Creative phrasing not covered by blocklist and above embedding threshold |
-| **Hallucination / ungrounded answers** | System prompt instructs LLM to answer only from provided excerpts; citations parsed and returned; explicit no-context fallback message | LLM may still confabulate; citation format mismatch loses attribution |
+| **Question content in logs** | Questions are SHA-256 hashed (32 hex chars) before logging — raw text never written; `session_id` constrained to `[A-Za-z0-9_-]{1,64}` to prevent log-forging | Brute-force of short/common questions |
+| **Secrets in codebase** | All secrets via `.env` / environment variables; `.env` is gitignored; no hardcoded keys; Docker build uses a **BuildKit secret** (never baked into an image layer) | Accidental `git add .env` (mitigated by gitignore + CI pre-commit hook) |
+| **Personal data access via questions** | Scope guard blocks `account balance`, `transaction history`, `customer [ID]`, etc.; **fails closed** (503) if the semantic gate is unavailable | Creative phrasing not covered by blocklist and above embedding threshold; English-only keyword list |
+| **Hallucination / ungrounded answers** | System prompt instructs LLM to answer only from provided excerpts; retrieval **relevance floor** drops weak matches and short-circuits to a refusal when nothing clears it; citations reflect only what the model actually cited (**no fabricated fallback citations**) | LLM may still confabulate; citation format mismatch loses attribution |
 
 ---
 
@@ -236,14 +277,20 @@ Every `/ask` request produces one structured JSON log line to stdout:
   "latency_ms": 3389.55,
   "prompt_tokens": 517,
   "completion_tokens": 84,
-  "total_tokens": 601,
+  "embedding_tokens": 22,
+  "total_tokens": 623,
   "session_id": null,
   "error_code": null,
   "timestamp": "2026-07-02T14:11:05.381Z"
 }
 ```
 
-`outcome` values: `success` | `injection_blocked` | `out_of_scope` | `error`
+`outcome` values: `success` | `no_context` | `injection_blocked` | `out_of_scope` | `error`
+
+`embedding_tokens` counts the scope-gate + retrieval embedding calls, so `total_tokens`
+reflects true per-request OpenAI spend (generation **and** embeddings), not just chat tokens.
+Every terminal path — including `INDEX_NOT_READY`, `SCOPE_UNAVAILABLE`, and `UPSTREAM_ERROR` —
+emits exactly one `ask_request` log line, so no failure is invisible on dashboards.
 
 In production these logs feed:
 - A cost dashboard (token counts -> OpenAI spend per day)
@@ -284,7 +331,7 @@ ttb-policy-assistant/
 │   ├── generation/
 │   │   └── generator.py     # structured prompt, gpt-4o-mini, citation parse
 │   ├── guardrails/
-│   │   ├── injection.py     # regex patterns for 10 attack signatures
+│   │   ├── injection.py     # regex patterns for 11 attack signatures
 │   │   ├── pii.py           # Presidio + regex fallback
 │   │   └── scope.py         # keyword blocklist + embedding cosine gate
 │   └── observability/

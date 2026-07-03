@@ -3,25 +3,25 @@
     {
       "id": "G01",
       "question": "How many days of annual leave am I entitled to if I have been with the bank for 3 years?",
-      "expected_keywords": ["15 days", "15"],
+      "expected_keywords": ["15 days"],
       "expected_source": "leave_policy.md"
     },
     {
       "id": "G02",
       "question": "How many days of annual leave do employees with 5 or more years of service receive?",
-      "expected_keywords": ["20 days", "20"],
+      "expected_keywords": ["20 days"],
       "expected_source": "leave_policy.md"
     },
     {
       "id": "G03",
       "question": "How many sick leave days are employees entitled to per year?",
-      "expected_keywords": ["30 days", "30"],
+      "expected_keywords": ["30 days"],
       "expected_source": "leave_policy.md"
     },
     {
       "id": "G04",
       "question": "What is the maternity leave entitlement at TTB Bank?",
-      "expected_keywords": ["98 days", "98"],
+      "expected_keywords": ["98 days"],
       "expected_source": "leave_policy.md"
     },
     {
@@ -33,13 +33,13 @@
     {
       "id": "G06",
       "question": "What is the minimum password length required for bank IT systems?",
-      "expected_keywords": ["12", "12 characters", "12-char"],
+      "expected_keywords": ["12 character", "12-char", "at least 12", "minimum of 12"],
       "expected_source": "information_security.md"
     },
     {
       "id": "G07",
       "question": "What is the maximum number of work-from-home days per week allowed?",
-      "expected_keywords": ["2 days", "2 work-from-home", "maximum of 2", "two days", "two work-from-home", "maximum of two", " 2,", " 2 "],
+      "expected_keywords": ["2 days", "two days", "2 work-from-home", "2 wfh", "maximum of 2", "maximum of two", "allowed is 2", "is 2 ", "2 per week"],
       "expected_source": "remote_work_policy.md"
     },
     {
@@ -57,7 +57,7 @@
     {
       "id": "G10",
       "question": "What rating triggers a Performance Improvement Plan at TTB Bank?",
-      "expected_keywords": ["2", "below 2", "rating of 2", "2 or below"],
+      "expected_keywords": ["rating of 2", "below 2", "2 or below", "rating below 2"],
       "expected_source": "performance_review.md"
     },
     {
@@ -87,7 +87,7 @@
     {
       "id": "G15",
       "question": "How often must high-risk customer profiles be reviewed under the KYC policy?",
-      "expected_keywords": ["every 1 year", "1 year", "annually"],
+      "expected_keywords": ["1 year", "annually", "every year"],
       "expected_source": "kyc_summary.md"
     },
     {
@@ -105,7 +105,7 @@
     {
       "id": "G18",
       "question": "Within how many working days are whistleblower reports acknowledged?",
-      "expected_keywords": ["3", "3 working days"],
+      "expected_keywords": ["3 working days", "three working days"],
       "expected_source": "whistleblower_policy.md"
     }
   ],
