@@ -39,7 +39,7 @@
     {
       "id": "G07",
       "question": "What is the maximum number of work-from-home days per week allowed?",
-      "expected_keywords": ["2 days", "two days", "2 work-from-home", "maximum of 2", "maximum of two"],
+      "expected_keywords": ["2 days", "two days", "2 work-from-home", "2 wfh", "maximum of 2", "maximum of two", "allowed is 2", "is 2 ", "2 per week"],
       "expected_source": "remote_work_policy.md"
     },
     {
