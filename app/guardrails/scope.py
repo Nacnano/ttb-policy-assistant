@@ -27,6 +27,11 @@ _ANCHOR_TEXTS = [
     "What is the code of conduct for conflicts of interest?",
     "What is the anti-bribery and corruption policy?",
     "How does the performance review process work?",
+    "What are the data classification tiers and handling rules?",
+    "What is the IT acceptable use policy for software and devices?",
+    "What are the social media guidelines for bank employees?",
+    "What is the travel policy for flights and hotel bookings?",
+    "How do I report misconduct through the whistleblower channel?",
 ]
 
 
@@ -38,7 +43,7 @@ class ScopeChecker:
         embedding_model: str = "text-embedding-3-small",
         threshold: float = 0.30,
     ):
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._embedding_model = embedding_model
         self._threshold = threshold
         self._anchor_vectors: np.ndarray | None = None

@@ -35,7 +35,7 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
     import re
 
     citation_pattern = re.compile(
-        r"\[SOURCE:\s*(?P<source>[^\|]+)\|\s*CHUNK:\s*(?P<chunk_id>[^\|]+)\|\s*EXCERPT:\s*(?P<excerpt>[^\]]+)\]",
+        r"\[SOURCE:\s*(?P<source>[^|]+?)\s*\|\s*CHUNK:\s*(?P<chunk_id>[^|]+?)\s*\|\s*EXCERPT:\s*(?P<excerpt>.+?)\]",
         re.IGNORECASE,
     )
 
@@ -65,7 +65,7 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
                 Citation(
                     source=c["source"],
                     chunk_id=c["chunk_id"],
-                    excerpt=c["text"][:200],
+                    excerpt=c["text"][:300],
                 )
             )
 
@@ -74,7 +74,7 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
 
 class Generator:
     def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o-mini"):
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._model = model
 
     def generate(self, question: str, chunks: list[dict]) -> dict:
