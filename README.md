@@ -186,22 +186,13 @@ I built this with AI assistance (Claude, by Anthropic) doing much of the code ge
 
 ## Appendix — Design Q&A
 
-Questions I'd expect a reviewer to ask that the sections above don't answer directly, with honest answers.
-
-**Q: The endpoints are `async def` — do the OpenAI calls actually run async?**
-Yes, now. The first version used the synchronous OpenAI client inside async handlers, which blocked the event loop for the ~4 s of each LLM round-trip and would have serialized concurrent requests. I caught this in review and converted the request path to `AsyncOpenAI` (generator, retriever, scope gate), measured the fix — three concurrent requests complete in the wall time of the slowest one (~7.7 s) instead of the sum (~21 s) — and left the offline ingest CLI synchronous on purpose. A side-effect worth mentioning: properly awaiting startup *exposed* a latent lifespan timeout in the eval harness that the blocking version had been masking.
+Questions I'd expect a reviewer to ask that the sections above don't answer directly, with honest answers. Scoped to the system design, the models, the guardrails, and the RAG pipeline.
 
 **Q: Could the model fabricate a citation?**
-Partially guarded. The parser only accepts citations the model actually emitted, and never falls back to "cite whatever was retrieved" — a refusal returns an empty citation list. But it does not currently cross-check the cited `chunk_id` against the retrieved set, so a hallucinated citation line in the correct format would pass through. The fix is a set-membership check against the retrieved chunk IDs (with tolerance for the model abbreviating IDs); it's a small change I'd pair with a citation-accuracy eval metric that validates against retrieval, not just the expected source name.
+Partially guarded. The parser only accepts citations the model actually emitted, and never falls back to "cite whatever was retrieved" — a refusal returns an empty citation list. But it does not currently cross-check the cited chunk against the retrieved set, so a hallucinated citation in the correct format would pass through. The fix is validating cited chunks against what retrieval actually returned, paired with a citation-accuracy eval metric that checks the same thing.
 
-**Q: Why module-level singletons in `main.py` instead of FastAPI dependency injection?**
-Pragmatism at this size: three objects created once in the lifespan, used by one endpoint. `Depends()` with `app.state` would be the pattern the moment there's a second endpoint or per-request configuration — the current structure converts to it mechanically. The singletons are already injected-by-mock in the integration tests, which is the main thing DI would have bought.
-
-**Q: What exactly happens when OpenAI is down?**
-Three layers: the client has a 30 s timeout; query embedding retries 3× with exponential backoff (tenacity); anything that still fails returns `503 UPSTREAM_ERROR` with full error telemetry in the log. Two subtleties: the scope gate *fails closed* (an unavailable guardrail refuses rather than waves through), and `/health` stays green — it's a liveness probe, and an upstream outage is a dependency failure, not a dead process. A readiness probe that pings the upstream would be the production addition.
-
-**Q: `session_id` is in the request model but there's no conversation memory — why?**
-It's a log-correlation field, not a memory key: a client can tag related requests and trace them across log lines. True multi-turn RAG (rewriting follow-up questions against history before retrieval) is a meaningful feature with real guardrail implications — history becomes another injection surface — so I left it out of a 1–2 day scope rather than half-build it.
+**Q: What happens when the LLM provider is down?**
+Failed upstream calls surface as `503 UPSTREAM_ERROR` with full error telemetry logged — the service degrades loudly, never silently. The key design point is that the guardrails *fail closed*: if the semantic scope gate can't operate, the service refuses to answer rather than answering unguarded. A security control that silently disappears is worse than an outage.
 
 **Q: How were the two magic numbers — retrieval floor 0.25 and scope threshold 0.30 — chosen?**
 By inspection, not optimization: I looked at score distributions for on-topic vs. off-topic queries and picked values with visible margin on both sides. Both are env-configurable. The proper method is a labelled query set and a precision/recall curve per threshold — that's on the roadmap, and I'd treat the current values as defaults, not truths.
