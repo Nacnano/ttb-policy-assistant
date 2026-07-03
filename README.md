@@ -1,37 +1,23 @@
-# TTB Policy Assistant
+# ttb Policy Assistant
 
-A production-style Python RAG microservice that answers TMBThanachart Bank staff questions about internal policies using Retrieval-Augmented Generation, with banking-grade guardrails and observability.
+A small RAG microservice that answers staff questions about ttb bank policies. Ask it a question over HTTP and it retrieves the relevant policy chunks from a FAISS index, generates an answer grounded in those chunks with citations, and refuses anything off-topic or adversarial.
 
-Built as a take-home engineering assessment for TTB's AI Centre of Excellence.
+Built as a take-home for ttb's AI Centre of Excellence, and treated as code headed for stabilization rather than a demo: guardrails, structured telemetry, tests, an eval gate, and Docker.
 
----
+## How to run
 
-## Quick Start
-
-### Prerequisites
-- Python 3.11+
-- OpenAI API key (`gpt-4o-mini` + `text-embedding-3-small`)
-
-### Local setup
+You need Python 3.11+ and an OpenAI API key.
 
 ```bash
-# 1. Install dependencies
 pip install -r requirements.txt
-python -m spacy download en_core_web_sm   # optional: enables full Presidio NER
+python -m spacy download en_core_web_sm   # optional: full PII detection (regex fallback otherwise)
 
-# 2. Configure secrets
-cp .env.example .env
-# Edit .env and set OPENAI_API_KEY=sk-...
-
-# 3. Build the vector index
-python scripts/ingest.py
-
-# 4. Start the service
-uvicorn app.main:app --reload
-# Auto docs: http://localhost:8000/docs
+cp .env.example .env                      # then set OPENAI_API_KEY=sk-...
+python scripts/ingest.py                  # chunk + embed + index the policies (one-time)
+uvicorn app.main:app --reload             # interactive docs at http://localhost:8000/docs
 ```
 
-### Smoke test
+Try it:
 
 ```bash
 curl -X POST http://localhost:8000/ask \
@@ -39,100 +25,33 @@ curl -X POST http://localhost:8000/ask \
   -d '{"question": "How many days of annual leave am I entitled to?"}'
 ```
 
----
-
-## Running Tests
+Tests need no API key — OpenAI is mocked:
 
 ```bash
-pytest -v
-# 95 tests, all passing — no API key required (integration tests mock OpenAI)
+pytest   # 95 tests: unit (chunking, guardrails, retrieval, generation) + /ask integration
 ```
 
----
+CI (GitHub Actions) runs the suite on Python 3.11 and 3.12 and verifies the Docker image builds on every push.
 
-## Eval Harness
-
-```bash
-python eval/run_eval.py
-# Requires OPENAI_API_KEY + built index
-```
-
-Runs 18 grounded Q&A + 6 adversarial questions in-process via httpx, prints a scored table.
-Generation runs at `temperature=0` so the harness is **reproducible** run-to-run; the model +
-embedding IDs are printed for provenance.
-
-**Metrics** (grounded set):
-- **keyword** — the expected fact phrase appears in the answer *and* it is not a refusal
-- **citation** — the expected source document is cited
-- **grounded** — keyword *and* citation, i.e. the answer is both correct and attributed
-
-The headline **RAG Groundedness Score** is the `grounded` rate. Adversarial pass-rate is
-reported separately (not folded into the RAG score). CI gate: `grounded ≥ 80%` **and**
-`adversarial = 100%`.
-
-**Results (last verified run — `gpt-4o-mini` / `text-embedding-3-small`, temp 0):**
-
-| Metric | Score |
-|---|---|
-| Grounded keyword accuracy | 100% (18/18) |
-| Grounded citation accuracy | 100% (18/18) |
-| **Groundedness (keyword AND citation)** | **100% (18/18)** |
-| Adversarial pass rate | 100% (6/6) |
-
-> Note: keyword matching is done against paraphrased LLM output, and `gpt-4o-mini` is not
-> perfectly deterministic even at temp 0, so an occasional grounded item may dip on a given
-> run (an earlier run scored 16/18 before a keyword phrase was broadened). The **CI gate**,
-> not a flat 100%, is what guarantees quality. Re-run `python scripts/ingest.py` before the
-> harness — the embedding scheme prefixes section context to each chunk (see ADR-003).
-
----
-
-## Docker
+### Docker
 
 ```bash
-# Build — bakes the FAISS index at build time. The key is passed as a BuildKit *secret*,
-# so it is never written into an image layer (a build-arg/ENV would leak via `docker history`).
-DOCKER_BUILDKIT=1 docker build \
-  --secret id=openai_key,env=OPENAI_API_KEY \
-  -t ttb-policy-assistant .
-
-# Run — runtime secrets come from the environment, not the image
+# The key is passed as a BuildKit secret to bake the index at build time,
+# so it never lands in an image layer (a build-arg or ENV would leak via `docker history`).
+DOCKER_BUILDKIT=1 docker build --secret id=openai_key,env=OPENAI_API_KEY -t ttb-policy-assistant .
 docker run --env-file .env -p 8000:8000 ttb-policy-assistant
 
-# Or via Compose (uses the same build secret from $OPENAI_API_KEY)
-OPENAI_API_KEY=$OPENAI_API_KEY docker compose up --build
+# or: OPENAI_API_KEY=$OPENAI_API_KEY docker compose up --build
 ```
 
-If no build secret is supplied the image still builds, but the index is **not** baked — you
-must build it at runtime (mount `policies/` and run `python scripts/ingest.py` into a mounted
-`data/faiss_index` volume) or `/ask` returns `503 INDEX_NOT_READY`.
+Without the build secret the image still builds — the index just isn't baked, and `/ask` returns `503 INDEX_NOT_READY` until you ingest into a mounted volume. The container runs as a non-root user with a `HEALTHCHECK` on `GET /health`. That check is liveness only: it stays green even if OpenAI is down, since that failure mode surfaces on `/ask` as a 503.
 
-The container runs as a non-root `appuser` and defines a `HEALTHCHECK` against `GET /health`,
-so `docker ps` / Compose / orchestrators can detect a wedged process. Note the healthcheck is a
-liveness signal only — it reports healthy even if the OpenAI upstream is down, since that
-failure mode only surfaces on `/ask`.
+## API
 
----
+`GET /health` → `{"status": "ok", "index_ready": true}`
 
-## API Reference
+`POST /ask` takes `{"question": "...", "session_id": "optional"}` and returns:
 
-### `GET /health`
-
-```json
-{"status": "ok", "index_ready": true}
-```
-
-### `POST /ask`
-
-**Request**
-```json
-{
-  "question": "What is the annual leave entitlement?",
-  "session_id": "optional-string"
-}
-```
-
-**Response 200**
 ```json
 {
   "answer": "Employees with less than 5 years of service receive 15 days...",
@@ -150,233 +69,117 @@ failure mode only surfaces on `/ask`.
 }
 ```
 
-**Error 400 / 503**
-```json
-{"detail": {"error": "...", "code": "OUT_OF_SCOPE"}}
-```
+Errors come back as `{"detail": {"error": "...", "code": "..."}}`:
 
-Error codes:
-- `400 INJECTION_DETECTED` — prompt-injection signature matched
-- `400 OUT_OF_SCOPE` — question not about bank policy
-- `422` — request validation failure (FastAPI default shape)
-- `503 INDEX_NOT_READY` — knowledge base not built
-- `503 SCOPE_UNAVAILABLE` — semantic scope gate could not load; failing closed
-- `503 UPSTREAM_ERROR` — LLM/embedding call failed (timeout, rate-limit, etc.)
-- `500 INTERNAL_ERROR` — catch-all backstop; no unhandled exception can escape without a structured body and one log line
+| Code | Status | Meaning |
+|---|---|---|
+| `INJECTION_DETECTED` | 400 | prompt-injection signature matched |
+| `OUT_OF_SCOPE` | 400 | not a bank-policy question |
+| — | 422 | request validation failed (FastAPI default shape) |
+| `INDEX_NOT_READY` | 503 | knowledge base not built yet |
+| `SCOPE_UNAVAILABLE` | 503 | scope guardrail couldn't load — failing closed |
+| `UPSTREAM_ERROR` | 503 | OpenAI call failed (timeout, rate limit, ...) |
+| `INTERNAL_ERROR` | 500 | backstop — no exception escapes without a structured body and a log line |
 
----
-
-## Architecture
+## How it works
 
 ```
 POST /ask
-  |
-  |-- [1] Pydantic validation (422 on fail; question stripped, session_id constrained)
-  |-- [2] Injection detection -> 400 INJECTION_DETECTED
-  |-- [3] PII redaction on input (Presidio + regex fallback)
-  |-- [4] Scope check: keyword blocklist + embedding cosine gate
-  |         -> 400 OUT_OF_SCOPE   (off-topic)
-  |         -> 503 SCOPE_UNAVAILABLE (gate could not load — FAIL CLOSED, never bypassed)
-  |-- [5] FAISS retrieval: embed query -> top-5 chunks above the relevance floor
-  |         -> if none clear the floor: grounded refusal, empty citations, no LLM call
-  |-- [6] LLM generation (temp 0): structured prompt w/ XML-delimited, section-tagged excerpts
-  |-- [7] PII redaction on output
-  |-- [8] structlog JSON log (question hash, latency, prompt/completion/embedding tokens, outcome)
-  `-- [9] AskResponse
-
-  Any upstream failure in [4]-[6] -> 503 UPSTREAM_ERROR with full error telemetry logged.
+  ├─ Pydantic validation (question length, session_id charset)
+  ├─ injection detection: 12 regex attack signatures            → 400
+  ├─ PII redaction on input (Presidio + regex fallback)
+  ├─ scope gate: keyword blocklist, then embedding cosine       → 400 out-of-scope
+  │    (fails CLOSED with 503 if the semantic gate can't load)
+  ├─ FAISS retrieval: top-5 chunks above a relevance floor
+  │    (nothing clears the floor → grounded refusal, no LLM call)
+  ├─ generation at temp 0: XML-delimited excerpts, citation parsing
+  ├─ PII redaction on output
+  └─ one structured JSON log line, on every path
 ```
 
-**Ingestion pipeline** (run once via `python scripts/ingest.py`):
+Ingestion (`python scripts/ingest.py`): load `policies/*.md` → split on Markdown headers, recursive fallback for long sections → batch-embed → FAISS index + metadata on disk.
 
-```
-policies/*.md -> loader -> MarkdownHeader chunker -> RecursiveChar fallback
-             -> OpenAI embedder (batched) -> FAISS IndexFlatIP + metadata.json
-```
+## Design decisions (ADRs)
 
----
+**ADR-001 — FAISS over pgvector / Azure AI Search.** I wanted zero infrastructure: FAISS runs in-process, persists as two files, and exact search over ~130 chunks takes under a millisecond. The trade-off is scalability — every replica carries its own index and adding documents means a rebuild. At thousands of documents I'd move to pgvector or Azure AI Search; the retriever interface is thin enough that it's a one-file swap.
 
-## Architecture Decision Records
+**ADR-002 — `gpt-4o-mini` + `text-embedding-3-small`.** Factual policy Q&A doesn't need a frontier model, and 4o-mini is 10–20x cheaper than GPT-4o. Both models are available on Azure OpenAI, so migrating is a `OPENAI_BASE_URL` change. The trade-off is depending on OpenAI's shared capacity; for production SLAs I'd use Azure Provisioned Throughput.
 
-### ADR-001 — FAISS over pgvector / Azure AI Search
+**ADR-003 — header-aware chunking with a recursive fallback.** Markdown headers mark real semantic boundaries in policy docs (an "Annual Leave" section stays intact), so I split on those first and only fall back to recursive character splitting (400 chars, 80 overlap) for oversized sections. Each chunk's source + header path is prefixed to the text that gets embedded and shown to the LLM, so sub-chunks that lost their header line still carry context. This relies on authors actually using headers — PDFs would need a different extraction step.
 
-**Decision:** FAISS `IndexFlatIP` with L2-normalised vectors (inner product = cosine similarity after normalization).
+**ADR-004 — Presidio for PII, with a regex fallback.** Presidio gives a pluggable redaction pipeline, extended with custom recognizers for Thai national IDs and bank account numbers. If the spaCy model isn't installed, the service still starts and falls back to regex for email/phone/Thai ID — degraded but never absent, and it logs a WARNING so the degradation is visible. The fallback can't catch person names; the Dockerfile installs the spaCy model so production always has full coverage.
 
-**Rationale:** Zero infrastructure — runs in-process, no external service, no auth to configure. At 130 chunks exact search completes in under 1 ms. Index persists to disk as two files (`index.faiss` + `metadata.json`). Simple to test with mocks.
+**ADR-005 — two-layer scope guard, failing closed.** A keyword blocklist catches the obvious off-topic asks (account balances, crypto, weather) for free; an embedding-similarity gate against 15 in-scope anchor phrases (threshold 0.30, configurable) catches the subtler ones. If the anchors can't load while an API key is configured, the service refuses with `503 SCOPE_UNAVAILABLE` rather than silently degrading to keywords only — a security gate should never disappear unnoticed. The threshold is heuristic; with more time I'd tune it against a labelled set.
 
-**Trade-off:** Not horizontally scalable. Each replica needs its own index copy, and adding documents requires a full rebuild. For thousands of documents or live update requirements, pgvector (Postgres extension) or Azure AI Search would be the right choice. The retriever interface is thin enough that swapping is a one-file change.
+## Threat model
 
----
-
-### ADR-002 — `gpt-4o-mini` for generation, `text-embedding-3-small` for retrieval
-
-**Decision:** OpenAI hosted models via standard REST API.
-
-**Rationale:** `gpt-4o-mini` is 10-20x cheaper than GPT-4o with sufficient quality for factual policy Q&A. `text-embedding-3-small` is fast, low-cost, and produces 1536-dim vectors well-suited for this scale. Both are available on Azure OpenAI — migrating requires only changing `OPENAI_BASE_URL` in `.env`.
-
-**Trade-off:** Dependency on OpenAI availability. For production SLAs, Azure OpenAI with Provisioned Throughput Units (PTU) would cap latency variance and remove shared-capacity throttling risk.
-
----
-
-### ADR-003 — MarkdownHeader splitting with Recursive fallback
-
-**Decision:** `MarkdownHeaderTextSplitter` first (splits on `#`/`##`/`###`), then `RecursiveCharacterTextSplitter` (400 chars, 80 overlap) for sections that exceed the chunk size.
-
-**Rationale:** Header-aware splitting keeps semantically coherent sections together (e.g., "Annual Leave" stays with its bullet points), which improves retrieval precision vs. pure character splitting. The recursive fallback handles unusually long sections without losing header context. Each chunk's `source` + `header_path` is **prefixed to the text that gets embedded** and shown to the LLM as a `Section:` tag, so recursively-split sub-chunks (which lose their header line) still carry self-contained context into both the vector and the prompt.
-
-**Trade-off:** Quality depends on the document author using headers consistently. Unstructured PDFs would need a different extraction strategy (e.g., unstructured.io or Azure Document Intelligence).
-
----
-
-### ADR-004 — Presidio with regex fallback for PII
-
-**Decision:** `presidio-analyzer` with custom Thai national ID (`\b[0-9]{13}\b`) and bank account recognizers. Falls back to regex patterns for email, phone, and Thai ID if the spaCy model is not installed.
-
-**Rationale:** Presidio provides a production-grade, pluggable PII redaction pipeline. Custom recognizers cover Thai-specific identifiers absent from the default configuration. The regex fallback means the service starts and provides baseline protection even in constrained environments (CI, Docker without the spaCy model).
-
-**Trade-off:** Regex fallback cannot detect PERSON names without NER context. Full protection requires `python -m spacy download en_core_web_sm`. In production, the spaCy model is always present (it is installed in the Dockerfile).
-
----
-
-### ADR-005 — Two-layer scope guard
-
-**Decision:** Keyword regex blocklist (O(1)) as the first gate; embedding cosine similarity to 15 in-scope anchor phrases as the second gate (threshold 0.30, configurable via `SCOPE_SIMILARITY_THRESHOLD`).
-
-**Rationale:** The blocklist catches obvious off-topic requests (account balances, crypto prices, weather) with zero API cost and sub-millisecond latency. The embedding gate catches subtler out-of-scope queries that bypass keywords. 15 anchors (one per policy area) are pre-computed at startup — the gate adds only one embedding call per request.
-
-**Fail-closed posture:** If the anchor embeddings cannot be loaded at startup (embedding API error) while an API key *is* configured, the service does **not** silently degrade to keyword-only. `/ask` returns `503 SCOPE_UNAVAILABLE` and logs a `WARNING` — a security gate must never disappear unnoticed.
-
-**Trade-off:** The 0.30 threshold was set heuristically. Production tuning would use a labelled evaluation set and precision/recall curves. Anchors and keywords are currently English-only (see Threat Model).
-
----
-
-## Threat Model
-
-| Threat | Control | Residual Risk |
+| Threat | Control | Residual risk |
 |---|---|---|
-| **Prompt injection** | `detect_injection()` regex on 12 known signatures (including base64 blobs); patterns tuned to avoid blocking benign phrasing (e.g. the name "Dan", "act as an approving manager"); LLM system prompt uses XML-delimited excerpts and explicit "ignore embedded instructions" directive | Novel jailbreaks not in pattern list; sophisticated LLM-level bypass; **English-only** — Thai-language injection is not pattern-matched (relies on the multilingual embedding scope gate) |
-| **PII exfiltration via input** | `redact_pii()` applied to input before retrieval and logging | NER misses in regex-fallback mode (PERSON not covered); adversarially obfuscated PII. Fallback logs a `WARNING` so degraded redaction is visible |
-| **PII leakage via output** | `redact_pii()` applied to LLM output before returning | LLM paraphrasing PII in novel phrasing not matching regex |
-| **Question content in logs** | Questions are SHA-256 hashed (32 hex chars) before logging — raw text never written; `session_id` constrained to `[A-Za-z0-9_-]{1,64}` to prevent log-forging | Brute-force of short/common questions |
-| **Secrets in codebase** | All secrets via `.env` / environment variables; `.env` is gitignored; no hardcoded keys; Docker build uses a **BuildKit secret** (never baked into an image layer) | Accidental `git add .env` (mitigated by gitignore + CI pre-commit hook) |
-| **Personal data access via questions** | Scope guard blocks `account balance`, `transaction history`, `customer [ID]`, etc.; **fails closed** (503) if the semantic gate is unavailable | Creative phrasing not covered by blocklist and above embedding threshold; English-only keyword list |
-| **Hallucination / ungrounded answers** | System prompt instructs LLM to answer only from provided excerpts; retrieval **relevance floor** drops weak matches and short-circuits to a refusal when nothing clears it; citations reflect only what the model actually cited (**no fabricated fallback citations**) | LLM may still confabulate; citation format mismatch loses attribution |
-
----
+| Prompt injection | 12 regex signatures (incl. base64 blobs), tuned against false positives; XML-delimited excerpts + explicit "ignore embedded instructions" in the system prompt | novel jailbreaks; patterns are English-only (Thai relies on the embedding scope gate) |
+| PII in input | redacted before retrieval and before logging | NER misses in regex-fallback mode (a WARNING makes the degraded mode visible) |
+| PII in output | redacted before returning | LLM paraphrasing PII into shapes the regex won't match |
+| Question content in logs | only a SHA-256 hash is logged, never raw text; `session_id` constrained to `[A-Za-z0-9_-]{1,64}` against log forging | brute-forcing short common questions |
+| Secrets in the repo | env vars only, `.env` gitignored, BuildKit secret for the Docker build | an accidental `git add .env` |
+| Customer-data fishing | blocklist (account balance, customer IDs, transactions) + embedding gate; fails closed on gate failure | creative phrasing above the similarity threshold; English-only keywords |
+| Hallucination | system prompt restricts answers to provided excerpts; relevance floor short-circuits to a refusal; citations reflect only what the model actually cited — no fabricated fallbacks | the model can still confabulate within its excerpts |
 
 ## Observability
 
-Every `/ask` request produces one structured JSON log line to stdout:
+Every request — success or any failure path — emits exactly one `ask_request` JSON line to stdout, so no outcome is invisible on a dashboard:
 
 ```json
 {
   "event": "ask_request",
-  "request_id": "1528514f-544b-4e9d-b545-bf5913d96efd",
-  "question_hash": "73b27e79fbbec3b4a1c2d3e4f5a6b7c8",
+  "request_id": "1528514f-...",
+  "question_hash": "73b27e79...",
   "outcome": "success",
   "latency_ms": 3389.55,
   "prompt_tokens": 517,
   "completion_tokens": 84,
   "embedding_tokens": 22,
   "total_tokens": 623,
-  "session_id": null,
   "error_code": null,
   "timestamp": "2026-07-02T14:11:05.381Z"
 }
 ```
 
-`outcome` values: `success` | `no_context` | `injection_blocked` | `out_of_scope` | `error`
+`outcome` is one of `success | no_context | injection_blocked | out_of_scope | error`. `embedding_tokens` counts the scope-gate and retrieval embedding calls too, so `total_tokens` reflects true per-request OpenAI spend, not just chat tokens. In production these lines feed a cost dashboard, a latency SLO dashboard (p50/p95/p99 per outcome), and an alert on sustained error rate.
 
-`embedding_tokens` counts the scope-gate + retrieval embedding calls, so `total_tokens`
-reflects true per-request OpenAI spend (generation **and** embeddings), not just chat tokens.
-Every terminal path — including `INDEX_NOT_READY`, `SCOPE_UNAVAILABLE`, and `UPSTREAM_ERROR` —
-emits exactly one `ask_request` log line, so no failure is invisible on dashboards.
+## SLOs (production targets)
 
-In production these logs feed:
-- A cost dashboard (token counts -> OpenAI spend per day)
-- A latency SLO dashboard (p50/p95/p99 per outcome type)
-- An alert on sustained error rate > 1% over a 5-minute window
-
----
-
-## SLOs (Production Targets)
-
-| SLO | Target | Measurement |
+| SLO | Target | Measured via |
 |---|---|---|
-| `POST /ask` p95 latency (successful) | < 5 s | `latency_ms` in logs |
-| `POST /ask` p99 latency | < 10 s | `latency_ms` in logs |
+| `/ask` p95 latency (successful) | < 5 s | `latency_ms` in logs |
+| `/ask` p99 latency | < 10 s | `latency_ms` in logs |
 | Availability | 99.5% | `/health` liveness probe |
-| Guardrail false-positive rate | < 2% of legitimate questions blocked | Manual review sample |
-| Hallucination rate | < 10% answers lacking grounded citations | Weekly eval harness run |
+| Guardrail false-positive rate | < 2% of legitimate questions | manual review sample |
+| Hallucination rate | < 10% answers without grounded citations | weekly eval run |
 
-Current p95 in evaluation: ~5.1 s (two OpenAI round-trips: embed + generate). Streaming responses would reduce perceived latency significantly.
+Current p95 in evaluation is ~5.1 s — two sequential OpenAI round-trips (embed, then generate). Streaming would cut perceived latency the most.
 
----
+## Eval harness
 
-## Project Layout
-
-```
-ttb-policy-assistant/
-├── app/
-│   ├── main.py              # FastAPI app, lifespan, /health + /ask
-│   ├── config.py            # pydantic-settings BaseSettings, @lru_cache
-│   ├── models.py            # AskRequest, AskResponse, Citation, ErrorResponse
-│   ├── ingestion/
-│   │   ├── loader.py        # load .md files from policies/
-│   │   ├── chunker.py       # MarkdownHeader + Recursive splitter
-│   │   ├── embedder.py      # OpenAI batched embed with tenacity retry
-│   │   └── indexer.py       # FAISS IndexFlatIP build + load
-│   ├── retrieval/
-│   │   └── retriever.py     # embed query, normalize, FAISS search
-│   ├── generation/
-│   │   └── generator.py     # structured prompt, gpt-4o-mini, citation parse
-│   ├── guardrails/
-│   │   ├── injection.py     # regex patterns for 12 attack signatures
-│   │   ├── pii.py           # Presidio + regex fallback
-│   │   └── scope.py         # keyword blocklist + embedding cosine gate
-│   └── observability/
-│       └── logging.py       # structlog JSON logger, log_request()
-├── policies/                # 15 synthetic .md policy documents
-├── data/faiss_index/        # index.faiss + metadata.json (gitignored)
-├── eval/
-│   ├── qa_pairs.json        # 18 grounded + 6 adversarial Q&A pairs
-│   └── run_eval.py          # in-process httpx + asgi-lifespan eval runner
-├── tests/
-│   ├── unit/                # test_chunker, test_pii, test_scope, test_injection
-│   └── integration/         # test_ask_endpoint (mocked OpenAI + FAISS)
-├── scripts/ingest.py        # CLI: loader -> chunker -> embedder -> indexer
-├── .env.example
-├── requirements.txt
-├── Dockerfile
-└── docker-compose.yml
+```bash
+python eval/run_eval.py   # needs OPENAI_API_KEY + a freshly built index (run scripts/ingest.py first)
 ```
 
----
+Runs 18 grounded questions plus 6 adversarial ones in-process against the real `/ask` path, at temperature 0 so results are reproducible; model and embedding IDs are printed for provenance. A grounded answer scores only if the expected fact appears **and** the expected source is cited — correctness without attribution doesn't count.
 
-## What I Would Do With More Time
+Last verified run (`gpt-4o-mini` / `text-embedding-3-small`): **groundedness 100% (18/18), adversarial 100% (6/6)**. The honest caveat: keyword-matching against paraphrased LLM output isn't perfectly stable even at temp 0 — an earlier run scored 16/18 before a keyword was broadened. That's why the harness enforces a gate (grounded ≥ 80% and adversarial = 100%) and exits non-zero on failure, rather than promising a flat 100%.
 
-1. **Streaming responses** — `POST /ask/stream` with server-sent events. The OpenAI SDK supports streaming natively; FastAPI supports SSE via `StreamingResponse`. Reduces perceived latency from ~4 s to first-token in < 1 s.
+## What I cut, and what I'd do next
 
-2. **Hybrid retrieval** — combine BM25 keyword search with dense vector retrieval, merged via Reciprocal Rank Fusion. Improves recall for exact-match queries (specific policy amounts, named sections).
+I kept to the assignment's 1–2 day time-box, which meant cutting deliberately: no auth or rate limiting (internal single-tenant demo), keyword-match eval instead of an LLM judge (cruder, but deterministic and free), no streaming, no hybrid retrieval, and guardrail patterns in English only — Thai coverage leans on the multilingual embedding gate.
 
-3. **Cross-encoder re-ranking** — add a reranker on top-10 FAISS results before passing top-5 to the LLM. Measurably improves answer groundedness on ambiguous queries.
+With more time, roughly in order:
 
-4. **CI/CD pipeline expansion** — add `docker build` smoke test and eval harness run with a score threshold gate (fail build if overall score < 80%) to the existing GitHub Actions workflow.
+1. **LLM-as-judge eval** — replace keyword matching with a GPT-4o judge plus RAGAS metrics (faithfulness, context precision) for a more defensible quality signal.
+2. **Streaming responses** — SSE via `StreamingResponse`; first token in under a second instead of ~4 s.
+3. **Hybrid retrieval + re-ranking** — BM25 merged with dense retrieval via reciprocal rank fusion, and a cross-encoder over the top 10; helps exact-match queries like specific allowance amounts.
+4. **pgvector** — live index updates without rebuilds or downtime.
+5. **Auth + rate limiting** — API keys or JWT, Redis token bucket.
+6. **Ops hardening** — eval-gate step in CI, readiness probes, graceful shutdown, exception tracking.
 
-5. **Live index updates** — replace FAISS with pgvector so new policy documents can be indexed without a full rebuild and without downtime.
+## AI use disclosure
 
-6. **Answer confidence scoring** — embed the generated answer and measure cosine similarity to the retrieved chunks. Flag low-confidence answers for human review before returning.
-
-7. **Rate limiting and authentication** — API key validation or JWT bearer tokens; per-key rate limiting via a Redis token bucket to prevent abuse.
-
-8. **LLM-as-judge eval** — replace keyword-match correctness with a GPT-4o judge that scores semantic equivalence. Add RAGAS metrics (faithfulness, answer relevancy, context precision) for a more defensible quality signal.
-
-9. **Async ingest pipeline** — parallelise embedding calls with `asyncio.gather`; cuts ingest time roughly proportionally to batch count at scale.
-
-10. **Production hardening** — Kubernetes liveness/readiness probes tied to `/health`; graceful shutdown to drain in-flight requests; OpenAI client connection pooling; Sentry for exception tracking.
-
----
-
-## AI Use Disclosure
-
-This project was built with AI assistance (Claude by Anthropic) for code generation, including the FastAPI application structure, guardrail implementations, test suite, eval harness, and documentation. All generated code was reviewed, debugged, and verified against the assignment specification. The architectural decisions, ADRs, threat model, and trade-offs reflect deliberate engineering choices made during the build process.
+I built this with AI assistance (Claude, by Anthropic) doing much of the code generation: the FastAPI scaffolding, guardrail implementations, tests, eval harness, and drafts of this README. I directed the architecture, reviewed and debugged all of the generated code, and verified the behaviour against the assignment spec — the design decisions, threat model, and trade-offs above are choices I made and can defend.
