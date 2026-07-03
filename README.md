@@ -59,16 +59,14 @@ python eval/run_eval.py
 
 Runs 18 grounded Q&A + 6 adversarial questions in-process via httpx, prints a scored table.
 
-**Results (last run on G01–G10 + A01–A03):**
+**Results (last run):**
 
 | Metric | Score |
 |---|---|
-| Grounded keyword accuracy | 100% (10/10) |
-| Grounded citation accuracy | 100% (10/10) |
-| Adversarial pass rate | 100% (3/3) |
+| Grounded keyword accuracy | 100% (18/18) |
+| Grounded citation accuracy | 100% (18/18) |
+| Adversarial pass rate | 100% (6/6) |
 | **Overall** | **100%** |
-
-G11–G18 and A04–A06 were added to cover all 15 policies; re-run with an API key to verify.
 
 ---
 

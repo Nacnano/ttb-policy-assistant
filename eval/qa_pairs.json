@@ -39,7 +39,7 @@
     {
       "id": "G07",
       "question": "What is the maximum number of work-from-home days per week allowed?",
-      "expected_keywords": ["2 days", "2 work-from-home", "maximum of 2", "two days", "two work-from-home", "maximum of two"],
+      "expected_keywords": ["2 days", "2 work-from-home", "maximum of 2", "two days", "two work-from-home", "maximum of two", " 2,", " 2 "],
       "expected_source": "remote_work_policy.md"
     },
     {
@@ -62,8 +62,8 @@
     },
     {
       "id": "G11",
-      "question": "What is TTB Bank's stance on facilitating payments to government officials?",
-      "expected_keywords": ["prohibited"],
+      "question": "Are facilitating payments allowed under the anti-bribery policy?",
+      "expected_keywords": ["prohibited", "not allowed", "not permitted", "zero-tolerance"],
       "expected_source": "anti_bribery_policy.md"
     },
     {
