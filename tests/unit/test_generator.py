@@ -35,6 +35,29 @@ def test_duplicate_chunk_ids_deduplicated():
     assert citations[0].chunk_id == "leave.md::chunk_0"
 
 
+def test_citations_heading_stripped_with_citation_lines():
+    answer_text = (
+        "You get 15 days of annual leave.\n"
+        "Citations:\n"
+        "[SOURCE: leave.md | CHUNK: leave.md::chunk_0 | EXCERPT: 15 days of annual leave]"
+    )
+    clean_answer, citations = _parse_citations(answer_text, _CHUNKS)
+
+    assert clean_answer == "You get 15 days of annual leave."
+    assert len(citations) == 1
+
+
+def test_bold_citations_heading_stripped():
+    answer_text = (
+        "You get 15 days of annual leave.\n"
+        "**Citations:**\n"
+        "[SOURCE: leave.md | CHUNK: leave.md::chunk_0 | EXCERPT: 15 days of annual leave]"
+    )
+    clean_answer, _ = _parse_citations(answer_text, _CHUNKS)
+
+    assert clean_answer == "You get 15 days of annual leave."
+
+
 def test_missing_citation_block_leaves_answer_untouched_and_no_fallback():
     answer_text = "You get 15 days of annual leave."
     clean_answer, citations = _parse_citations(answer_text, _CHUNKS)

@@ -58,10 +58,13 @@ def _parse_citations(answer_text: str, chunks: list[dict]) -> tuple[str, list[Ci
                 )
             )
 
-    # Remove citation lines from the answer
+    # Remove citation lines from the answer, along with any "Citations:" heading the model
+    # wrote above them and blank lines left behind by the stripping.
     clean_answer = citation_pattern.sub("", answer_text).strip()
-    # Remove trailing blank lines that result from stripping citations
-    clean_answer = "\n".join(line for line in clean_answer.splitlines() if line.strip())
+    label_pattern = re.compile(r"^\s*(?:\*\*|#+\s*)?citations?\s*:?\s*(?:\*\*)?\s*$", re.IGNORECASE)
+    clean_answer = "\n".join(
+        line for line in clean_answer.splitlines() if line.strip() and not label_pattern.match(line)
+    )
 
     # NOTE: intentionally NO fallback citations. A citation must represent what the answer
     # is actually grounded in — fabricating citations from the retrieved set (even for a
