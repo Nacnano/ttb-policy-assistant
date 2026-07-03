@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     configure_logging()
     settings = get_settings()
 
+    if not settings.openai_api_key:
+        logger.warning("openai_api_key_empty", msg="OPENAI_API_KEY is not set. LLM calls will fail.")
+
     try:
         index, metadata = load_index(settings.faiss_index_dir)
         _retriever = Retriever(

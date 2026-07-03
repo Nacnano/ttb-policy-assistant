@@ -37,7 +37,7 @@ def get_logger(name: str = "ttb.policy"):
 
 def hash_question(question: str) -> str:
     """One-way hash of question so logs contain no PII."""
-    return hashlib.sha256(question.encode()).hexdigest()[:16]
+    return hashlib.sha256(question.encode()).hexdigest()[:32]
 
 
 def log_request(

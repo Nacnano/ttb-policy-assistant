@@ -5,6 +5,10 @@ falling back to regex-only redaction if the spaCy model is not installed.
 import re
 from typing import Optional
 
+import structlog
+
+_logger = structlog.get_logger("ttb.pii")
+
 # --- Regex-only fallback patterns ---
 _REGEX_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"), "<EMAIL_ADDRESS>"),
@@ -50,8 +54,10 @@ def _try_init_presidio():
         _analyzer = analyzer
         _anonymizer = AnonymizerEngine()
         _presidio_available = True
-    except Exception:
+        _logger.info("pii_engine_initialized", engine="presidio")
+    except Exception as exc:
         _presidio_available = False
+        _logger.info("pii_engine_initialized", engine="regex_fallback", reason=str(exc))
 
 
 _try_init_presidio()
@@ -76,8 +82,8 @@ def redact_pii(text: str) -> str:
             if results:
                 return _anonymizer.anonymize(text=text, analyzer_results=results).text
             return text
-        except Exception:
-            pass  # fall through to regex
+        except Exception as exc:
+            _logger.warning("presidio_runtime_error", error=str(exc))
 
     # Regex fallback
     for pattern, replacement in _REGEX_RULES:
