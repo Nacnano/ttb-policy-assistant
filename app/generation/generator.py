@@ -82,18 +82,18 @@ class Generator:
         temperature: float = 0.0,
         max_tokens: int = 1024,
     ):
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
+        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
 
-    def generate(self, question: str, chunks: list[dict]) -> dict:
+    async def generate(self, question: str, chunks: list[dict]) -> dict:
         """Generate a grounded answer with citations. Returns dict with answer, citations, token counts."""
         excerpts = _build_excerpts(chunks)
         system_msg = _SYSTEM_PROMPT.format(excerpts=excerpts)
         user_msg = _USER_TEMPLATE.format(question=question)
 
-        response = self._client.chat.completions.create(
+        response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {"role": "system", "content": system_msg},

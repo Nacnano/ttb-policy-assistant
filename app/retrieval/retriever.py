@@ -15,13 +15,13 @@ class Retriever:
     ):
         self._index = index
         self._metadata = metadata
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
+        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._embedding_model = embedding_model
         self.last_embed_tokens = 0
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _embed_query(self, query: str) -> np.ndarray:
-        response = self._client.embeddings.create(input=[query], model=self._embedding_model)
+    async def _embed_query(self, query: str) -> np.ndarray:
+        response = await self._client.embeddings.create(input=[query], model=self._embedding_model)
         usage = getattr(response, "usage", None)
         tokens = getattr(usage, "total_tokens", 0)
         # Guard against mocked usage (MagicMock) in tests
@@ -30,9 +30,9 @@ class Retriever:
         faiss.normalize_L2(vec)
         return vec
 
-    def retrieve(self, query: str, top_k: int = 5, min_score: float = 0.0) -> list[dict]:
+    async def retrieve(self, query: str, top_k: int = 5, min_score: float = 0.0) -> list[dict]:
         """Return chunks scoring above `min_score`, most similar first (max top_k)."""
-        query_vec = self._embed_query(query)
+        query_vec = await self._embed_query(query)
         scores, indices = self._index.search(query_vec, top_k)
 
         results = []

@@ -4,7 +4,7 @@ Mocks OpenAI and FAISS index so no external services are needed.
 """
 import numpy as np
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 
@@ -56,11 +56,11 @@ _ANSWER = (
 def client():
     mock_index = _make_faiss_index()
     mock_client_instance = MagicMock()
-    mock_client_instance.embeddings.create.return_value = _make_embedding_response()
-    mock_client_instance.chat.completions.create.return_value = _make_chat_response(_ANSWER)
+    mock_client_instance.embeddings.create = AsyncMock(return_value=_make_embedding_response())
+    mock_client_instance.chat.completions.create = AsyncMock(return_value=_make_chat_response(_ANSWER))
 
     with patch("app.main.load_index", return_value=(mock_index, _MOCK_METADATA)), \
-         patch("openai.OpenAI", return_value=mock_client_instance):
+         patch("openai.AsyncOpenAI", return_value=mock_client_instance):
         from app.main import app
         with TestClient(app) as c:
             yield c

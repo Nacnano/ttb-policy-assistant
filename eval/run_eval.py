@@ -59,7 +59,9 @@ async def run_eval():
     total_prompt_tokens = 0
     total_completion_tokens = 0
 
-    async with LifespanManager(app) as manager, httpx.AsyncClient(
+    # Startup awaits the scope-anchor embedding call (~5s on a cold connection), so the
+    # default 10s lifespan timeout is too tight — give it a real margin.
+    async with LifespanManager(app, startup_timeout=60) as manager, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=manager.app), base_url="http://test"
     ) as client:
         # ---- Grounded questions ----

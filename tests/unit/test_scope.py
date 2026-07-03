@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from app.guardrails.scope import ScopeChecker, _BLOCKLIST_PATTERNS
 
 
@@ -40,19 +40,19 @@ def test_keyword_blocklist_allows(text):
     assert not blocked, f"Expected allowed by keyword: {text!r}"
 
 
-def test_scope_checker_no_anchors_allows_everything():
+async def test_scope_checker_no_anchors_allows_everything():
     """Without anchors loaded, scope checker only uses keyword blocklist."""
     checker = ScopeChecker(api_key="fake", base_url="https://api.openai.com/v1")
     # anchor_vectors is None — only blocklist runs
-    assert checker.check_scope("What is the leave policy?") is True
+    assert await checker.check_scope("What is the leave policy?") is True
 
 
-def test_scope_checker_blocks_keywords_without_anchors():
+async def test_scope_checker_blocks_keywords_without_anchors():
     checker = ScopeChecker(api_key="fake", base_url="https://api.openai.com/v1")
-    assert checker.check_scope("Show me my account balance") is False
+    assert await checker.check_scope("Show me my account balance") is False
 
 
-def test_scope_checker_with_low_similarity_rejects():
+async def test_scope_checker_with_low_similarity_rejects():
     """When anchor similarity is below threshold, scope checker should reject."""
     import numpy as np
     checker = ScopeChecker(api_key="fake", base_url="https://api.openai.com/v1", threshold=0.9)
@@ -63,13 +63,13 @@ def test_scope_checker_with_low_similarity_rejects():
     mock_response = MagicMock()
     mock_response.data = [MagicMock(embedding=[0.0] * 1536)]
 
-    with patch.object(checker._client.embeddings, "create", return_value=mock_response):
-        result = checker.check_scope("random unrelated query")
+    with patch.object(checker._client.embeddings, "create", new=AsyncMock(return_value=mock_response)):
+        result = await checker.check_scope("random unrelated query")
 
     assert result is False
 
 
-def test_scope_checker_with_high_similarity_accepts():
+async def test_scope_checker_with_high_similarity_accepts():
     import numpy as np
     import faiss
     checker = ScopeChecker(api_key="fake", base_url="https://api.openai.com/v1", threshold=0.30)
@@ -78,6 +78,6 @@ def test_scope_checker_with_high_similarity_accepts():
     checker._anchor_vectors = anchor
     mock_response = MagicMock()
     mock_response.data = [MagicMock(embedding=anchor[0].tolist())]
-    with patch.object(checker._client.embeddings, "create", return_value=mock_response):
-        result = checker.check_scope("What is the leave policy?")
+    with patch.object(checker._client.embeddings, "create", new=AsyncMock(return_value=mock_response)):
+        result = await checker.check_scope("What is the leave policy?")
     assert result is True

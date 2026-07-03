@@ -43,7 +43,7 @@ class ScopeChecker:
         embedding_model: str = "text-embedding-3-small",
         threshold: float = 0.30,
     ):
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
+        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         self._embedding_model = embedding_model
         self._threshold = threshold
         self._anchor_vectors: np.ndarray | None = None
@@ -54,14 +54,14 @@ class ScopeChecker:
         """True once the semantic-gate anchor embeddings have been loaded."""
         return self._anchor_vectors is not None
 
-    def load_anchors(self) -> None:
+    async def load_anchors(self) -> None:
         """Pre-compute anchor embeddings (call once at startup)."""
-        response = self._client.embeddings.create(input=_ANCHOR_TEXTS, model=self._embedding_model)
+        response = await self._client.embeddings.create(input=_ANCHOR_TEXTS, model=self._embedding_model)
         vectors = np.array([item.embedding for item in response.data], dtype="float32")
         faiss.normalize_L2(vectors)
         self._anchor_vectors = vectors
 
-    def check_scope(self, text: str) -> bool:
+    async def check_scope(self, text: str) -> bool:
         """
         Return True if the text is in scope (i.e. about bank policies).
         Return False if it should be refused.
@@ -75,7 +75,7 @@ class ScopeChecker:
 
         # Layer 2: embedding similarity gate
         if self._anchor_vectors is not None:
-            response = self._client.embeddings.create(input=[text], model=self._embedding_model)
+            response = await self._client.embeddings.create(input=[text], model=self._embedding_model)
             usage = getattr(response, "usage", None)
             tokens = getattr(usage, "total_tokens", 0)
             self.last_embed_tokens = tokens if isinstance(tokens, int) else 0

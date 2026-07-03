@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.generation.generator import Generator, _parse_citations
 
@@ -83,14 +83,14 @@ def _mock_chat_response(content: str):
     return resp
 
 
-def test_generate_passes_temperature_and_max_tokens_through():
+async def test_generate_passes_temperature_and_max_tokens_through():
     mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _mock_chat_response(
+    mock_client.chat.completions.create = AsyncMock(return_value=_mock_chat_response(
         "You get 15 days of annual leave.\n"
         "[SOURCE: leave.md | CHUNK: leave.md::chunk_0 | EXCERPT: 15 days of annual leave]"
-    )
+    ))
 
-    with patch("openai.OpenAI", return_value=mock_client):
+    with patch("openai.AsyncOpenAI", return_value=mock_client):
         generator = Generator(
             api_key="fake",
             base_url="https://api.openai.com/v1",
@@ -98,7 +98,7 @@ def test_generate_passes_temperature_and_max_tokens_through():
             temperature=0.7,
             max_tokens=256,
         )
-        result = generator.generate("How many days of annual leave?", _CHUNKS)
+        result = await generator.generate("How many days of annual leave?", _CHUNKS)
 
     _, kwargs = mock_client.chat.completions.create.call_args
     assert kwargs["temperature"] == 0.7

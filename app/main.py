@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     )
     if settings.openai_api_key:
         try:
-            _scope_checker.load_anchors()
+            await _scope_checker.load_anchors()
             logger.info("scope_anchors_loaded")
         except Exception as e:
             logger.warning("scope_anchors_failed", error=str(e))
@@ -139,7 +139,7 @@ async def ask(body: AskRequest, request: Request):
                         code="SCOPE_UNAVAILABLE",
                     ).model_dump(),
                 )
-            if not _scope_checker.check_scope(redacted_question):
+            if not await _scope_checker.check_scope(redacted_question):
                 latency_ms = (time.perf_counter() - start) * 1000
                 log_request(logger, request_id, body.question, "out_of_scope", latency_ms,
                             session_id=body.session_id, error_code="OUT_OF_SCOPE")
@@ -163,7 +163,7 @@ async def ask(body: AskRequest, request: Request):
                     code="INDEX_NOT_READY",
                 ).model_dump(),
             )
-        chunks = _retriever.retrieve(
+        chunks = await _retriever.retrieve(
             redacted_question, top_k=settings.top_k, min_score=settings.retrieval_min_score
         )
         embedding_tokens = _scope_checker.last_embed_tokens if _scope_checker else 0
@@ -181,7 +181,7 @@ async def ask(body: AskRequest, request: Request):
             )
 
         # 6. Generation
-        result = _generator.generate(redacted_question, chunks)
+        result = await _generator.generate(redacted_question, chunks)
 
         # 7. PII redaction on output
         safe_answer = redact_pii(result["answer"])
